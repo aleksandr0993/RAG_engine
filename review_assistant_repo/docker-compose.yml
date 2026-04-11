@@ -1,0 +1,26 @@
+services:
+  api:
+    build:
+      context: .
+      target: development
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+
+  # docker compose --profile rl-worker up  (set RL_TRAIN_ASYNC_EXECUTOR=external_worker in .env)
+  rl-train-worker:
+    profiles:
+      - rl-worker
+    build:
+      context: .
+      target: development
+    env_file:
+      - .env
+    command: python scripts/run_rl_train_worker.py
+    volumes:
+      - ./:/app
+    depends_on:
+      - api

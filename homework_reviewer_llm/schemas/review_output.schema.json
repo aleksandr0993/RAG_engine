@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/homework-reviewer/review-output.schema.json",
+  "$comment": "Формат v1. Гибридный ответ v2 (студент + ревьюер + factor_analysis): см. review_output_v2.schema.json.",
+  "title": "HomeworkReviewOutput",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "strengths",
+    "issues",
+    "recommendations",
+    "score_justification",
+    "overall_score"
+  ],
+  "properties": {
+    "strengths": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text"],
+        "properties": {
+          "text": { "type": "string", "minLength": 1 },
+          "evidence_quote": { "type": "string" }
+        }
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "severity"],
+        "properties": {
+          "text": { "type": "string", "minLength": 1 },
+          "severity": { "type": "string", "enum": ["low", "medium", "high"] },
+          "evidence_quote": { "type": "string" }
+        }
+      }
+    },
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "actionable"],
+        "properties": {
+          "text": { "type": "string", "minLength": 1 },
+          "actionable": { "type": "boolean" }
+        }
+      }
+    },
+    "score_justification": { "type": "string", "minLength": 1 },
+    "overall_score": { "type": "number" },
+    "rubric_scores": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [{ "type": "number" }, { "type": "string" }]
+      }
+    }
+  }
+}

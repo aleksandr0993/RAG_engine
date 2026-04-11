@@ -1,0 +1,124 @@
+{
+  "criteria": [
+    {
+      "code": "html_has_title",
+      "applies_to": "html",
+      "category": "structure",
+      "severity": "required",
+      "title": "Есть заголовок первого уровня",
+      "description": "В документе должен быть хотя бы один заголовок <h1>",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": ["html_heading"],
+        "patterns_any": ["h1:"]
+      },
+      "comment_templates": {
+        "pass": "Заголовок h1 найден.",
+        "fail": "Добавь основной заголовок документа (h1)."
+      }
+    },
+    {
+      "code": "html_has_sections",
+      "applies_to": "html",
+      "category": "structure",
+      "severity": "warning",
+      "title": "Есть разделы",
+      "description": "Документ лучше структурировать подзаголовками h2 или h3",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": ["html_heading"],
+        "patterns_any": ["h2:", "h3:"]
+      },
+      "comment_templates": {
+        "pass": "Подзаголовки h2/h3 найдены.",
+        "fail": "Добавь разделы с подзаголовками h2 или h3."
+      }
+    },
+    {
+      "code": "html_has_intro_paragraph",
+      "applies_to": "html",
+      "category": "structure",
+      "severity": "warning",
+      "title": "Содержательное введение",
+      "description": "Первый абзац должен быть достаточно развёрнутым (от 80 символов)",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": ["html_intro_paragraph"],
+        "patterns_any": []
+      },
+      "comment_templates": {
+        "pass": "Первый абзац выглядит содержательным.",
+        "fail": "Расширь первый абзац введения (не менее ~80 символов)."
+      }
+    },
+    {
+      "code": "html_has_code_blocks",
+      "applies_to": "html",
+      "category": "technical",
+      "severity": "warning",
+      "title": "Есть фрагменты кода",
+      "description": "При необходимости покажи код в блоках <code> или <pre>",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": ["html_code_block"],
+        "patterns_any": []
+      },
+      "comment_templates": {
+        "pass": "Блоки кода найдены.",
+        "fail": "Если уместно, добавь примеры кода в отдельных блоках."
+      }
+    },
+    {
+      "code": "html_has_table_or_image",
+      "applies_to": "html",
+      "category": "visualization",
+      "severity": "warning",
+      "title": "Есть таблица или изображение",
+      "description": "Для наглядности полезны таблицы или иллюстрации",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": ["html_table", "html_image"],
+        "patterns_any": []
+      },
+      "comment_templates": {
+        "pass": "Таблица или изображение найдены.",
+        "fail": "Добавь таблицу или изображение, если это уместно по задаче."
+      }
+    },
+    {
+      "code": "html_has_conclusion",
+      "applies_to": "html",
+      "category": "analysis",
+      "severity": "warning",
+      "title": "Есть вывод или итог",
+      "description": "В тексте или заголовке должны встречаться слова про вывод/итог/заключение",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": ["html_heading", "html_paragraph"],
+        "patterns_any": ["вывод", "итог", "заключ"]
+      },
+      "comment_templates": {
+        "pass": "Блок с выводом/итогом найден.",
+        "fail": "Добавь явный вывод или итог по работе."
+      }
+    },
+    {
+      "code": "html_min_text_length",
+      "applies_to": "html",
+      "category": "presentation",
+      "severity": "warning",
+      "title": "Достаточный объём текста",
+      "description": "Суммарный текст страницы не менее 300 символов",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": ["html_document"],
+        "min_normalized_length": 300,
+        "patterns_any": []
+      },
+      "comment_templates": {
+        "pass": "Объём текста достаточный.",
+        "fail": "Текста слишком мало — раскрой описание, выводы и контекст."
+      }
+    }
+  ]
+}

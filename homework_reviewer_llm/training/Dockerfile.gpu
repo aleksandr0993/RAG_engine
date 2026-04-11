@@ -1,0 +1,14 @@
+# Сборка: docker build -f training/Dockerfile.gpu -t hw-reviewer-train .
+# Запуск (пример): docker run --gpus all -v $PWD:/work -w /work hw-reviewer-train \
+#   accelerate launch training/train_qlora.py --model_name ... --dataset_jsonl ... --output_dir runs/exp1
+FROM pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime
+
+WORKDIR /work
+COPY pyproject.toml README.md /work/
+COPY src /work/src
+COPY training /work/training
+COPY scripts /work/scripts
+
+RUN pip install --no-cache-dir -e ".[train]" && pip install --no-cache-dir accelerate
+
+ENV PYTHONUNBUFFERED=1

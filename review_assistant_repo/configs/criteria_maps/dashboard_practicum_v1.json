@@ -1,0 +1,216 @@
+{
+  "criteria": [
+    {
+      "code": "pdf_text_present",
+      "category": "technical",
+      "applies_to": "pdf",
+      "severity": "required",
+      "title": "Из PDF извлечён текст",
+      "description": "Нужно уметь извлечь хотя бы базовый текст страницы дашборда",
+      "detection_mode": "visual",
+      "visual_check": {
+        "task": "has_extracted_text"
+      },
+      "comment_templates": {
+        "pass": "Текст PDF извлечён.",
+        "fail": "Не удалось извлечь текст из PDF-дашборда."
+      }
+    },
+    {
+      "code": "pdf_regions_extracted",
+      "category": "visualization",
+      "applies_to": "pdf",
+      "severity": "warning",
+      "title": "Из PDF выделены регионы",
+      "description": "Парсер должен раскладывать страницу на смысловые текстовые регионы",
+      "detection_mode": "visual",
+      "visual_check": {
+        "task": "pdf_regions_extracted"
+      },
+      "comment_templates": {
+        "pass": "Регионы страницы выделены.",
+        "fail": "Пока не удалось выделить текстовые регионы страницы PDF."
+      }
+    },
+    {
+      "code": "pdf_page_images_saved",
+      "category": "visualization",
+      "applies_to": "pdf",
+      "severity": "warning",
+      "title": "Страницы PDF сохранены как изображения",
+      "description": "Для дальнейшего visual analysis полезно сохранять страницы PDF как PNG",
+      "detection_mode": "visual",
+      "visual_check": {
+        "task": "pdf_page_images_saved"
+      },
+      "comment_templates": {
+        "pass": "Изображения страниц сохранены.",
+        "fail": "Пока не сохранены изображения страниц PDF для дальнейшего visual analysis."
+      }
+    },
+    {
+      "code": "pdf_overlays_saved",
+      "category": "visualization",
+      "applies_to": "pdf",
+      "severity": "warning",
+      "title": "Сохранены overlay-изображения PDF",
+      "description": "Для визуальной верификации полезно сохранять PNG с наложенными region box'ами",
+      "detection_mode": "visual",
+      "visual_check": {
+        "task": "pdf_overlays_saved"
+      },
+      "comment_templates": {
+        "pass": "Overlay-изображения сохранены.",
+        "fail": "Пока не сохранены overlay-изображения с region box'ами."
+      }
+    },
+    {
+      "code": "pdf_image_regions_extracted",
+      "category": "visualization",
+      "applies_to": "pdf",
+      "severity": "warning",
+      "title": "Из изображений страниц выделены image-регионы",
+      "description": "После рендера PDF в PNG парсер должен находить хотя бы базовые image-based регионы",
+      "detection_mode": "visual",
+      "visual_check": {
+        "task": "pdf_image_regions_extracted"
+      },
+      "comment_templates": {
+        "pass": "Image-based регионы найдены.",
+        "fail": "Пока не удалось выделить image-based регионы страниц PDF."
+      }
+    },
+    {
+      "code": "dashboard_structure_signal",
+      "category": "structure",
+      "applies_to": "pdf",
+      "severity": "warning",
+      "title": "Есть сигналы структуры дашборда",
+      "description": "Парсер должен находить признаки KPI, фильтров, графиков или таблиц",
+      "detection_mode": "visual",
+      "visual_check": {
+        "task": "infer_dashboard_structure"
+      },
+      "comment_templates": {
+        "pass": "Есть сигналы структуры дашборда.",
+        "fail": "Структура дашборда пока определяется слишком слабо."
+      }
+    },
+    {
+      "code": "dashboard_metric_signal",
+      "category": "analysis",
+      "applies_to": "pdf",
+      "severity": "warning",
+      "title": "Есть сигналы метрик/KPI",
+      "description": "Хорошо, если в PDF есть признаки метрик или KPI",
+      "detection_mode": "visual",
+      "visual_check": {
+        "task": "has_metric_signals"
+      },
+      "comment_templates": {
+        "pass": "Сигналы KPI найдены.",
+        "fail": "Пока не видно явных сигналов KPI/метрик на дашборде."
+      }
+    },
+    {
+      "code": "dashboard_filter_signal",
+      "category": "visualization",
+      "applies_to": "pdf",
+      "severity": "warning",
+      "title": "Есть сигналы фильтров",
+      "description": "На дашборде желательно видеть признаки фильтров",
+      "detection_mode": "visual",
+      "visual_check": {
+        "task": "has_filter_signals"
+      },
+      "comment_templates": {
+        "pass": "Сигналы фильтров найдены.",
+        "fail": "Пока не видно явных признаков фильтров на дашборде."
+      }
+    },
+    {
+      "code": "has_business_interpretation_text",
+      "category": "presentation",
+      "applies_to": "pdf",
+      "severity": "warning",
+      "title": "Бизнес-интерпретация в тексте",
+      "description": "Ищем следы интерпретации метрик в извлечённом тексте",
+      "detection_mode": "hybrid",
+      "hybrid_check": { "task": "has_business_interpretation_text" },
+      "comment_templates": {
+        "pass": "Найдены признаки бизнес-интерпретации.",
+        "fail": "Добавь короткие пояснения к метрикам прямо на дашборде."
+      }
+    },
+    {
+      "code": "has_explanatory_titles",
+      "category": "structure",
+      "applies_to": "pdf",
+      "severity": "warning",
+      "title": "Поясняющие заголовки",
+      "description": "Заголовки секций или структурированный текст",
+      "detection_mode": "hybrid",
+      "hybrid_check": { "task": "has_explanatory_titles" },
+      "comment_templates": {
+        "pass": "Структура заголовков выглядит разумно.",
+        "fail": "Уточни заголовки виджетов, чтобы было понятно, что показывает график/таблица."
+      }
+    },
+    {
+      "code": "has_conclusion_or_note_block",
+      "category": "analysis",
+      "applies_to": "pdf",
+      "severity": "warning",
+      "title": "Примечание или вывод",
+      "description": "Блок примечания/вывода на дашборде",
+      "detection_mode": "hybrid",
+      "hybrid_check": { "task": "has_conclusion_or_note_block" },
+      "comment_templates": {
+        "pass": "Найден блок примечания/вывода.",
+        "fail": "Добавь короткий вывод или примечание к дашборду."
+      }
+    },
+    {
+      "code": "has_chart_regions_visual",
+      "category": "visualization",
+      "applies_to": "pdf",
+      "severity": "warning",
+      "title": "Image-регионы типа chart",
+      "description": "Heuristic chart-like bounding boxes on rendered page",
+      "detection_mode": "visual",
+      "visual_check": { "task": "has_chart_regions" },
+      "comment_templates": {
+        "pass": "Выделены chart-like регионы.",
+        "fail": "Не удалось выделить chart-like регионы на рендере страницы."
+      }
+    },
+    {
+      "code": "overlay_generated_pdf",
+      "category": "visualization",
+      "applies_to": "pdf",
+      "severity": "warning",
+      "title": "Overlay сгенерирован",
+      "description": "PNG overlay with region boxes exists for at least one page",
+      "detection_mode": "visual",
+      "visual_check": { "task": "overlay_generated" },
+      "comment_templates": {
+        "pass": "Overlay артефакт присутствует.",
+        "fail": "Overlay для верификации регионов не найден."
+      }
+    },
+    {
+      "code": "low_text_extraction_quality_pdf",
+      "category": "data_quality",
+      "applies_to": "pdf",
+      "severity": "warning",
+      "title": "Качество извлечения текста",
+      "description": "Heuristic check for very short extracted text per page",
+      "detection_mode": "visual",
+      "visual_check": { "task": "low_text_extraction_quality" },
+      "comment_templates": {
+        "pass": "Текст с страниц извлекается достаточно плотно.",
+        "fail": "Много страниц с очень коротким текстом — проверь экспорт PDF."
+      }
+    }
+  ]
+}

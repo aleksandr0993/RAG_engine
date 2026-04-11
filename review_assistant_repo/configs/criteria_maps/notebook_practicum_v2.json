@@ -1,0 +1,142 @@
+{
+  "criteria": [
+    {
+      "code": "intro_exists",
+      "category": "structure",
+      "applies_to": "ipynb",
+      "severity": "required",
+      "title": "Есть введение в проект",
+      "description": "В проекте должно быть введение: цель, задачи, описание данных",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": ["markdown_cell"],
+        "patterns_any": ["введение", "цель проекта", "описание данных", "задачи проекта"]
+      },
+      "comment_templates": {
+        "pass": "Введение найдено.",
+        "fail": "Добавь введение: цель проекта, задачи и краткое описание исходных данных."
+      }
+    },
+    {
+      "code": "has_meaningful_intro",
+      "category": "structure",
+      "applies_to": "ipynb",
+      "severity": "warning",
+      "title": "Введение содержательное",
+      "description": "Введение должно быть не только заголовком, но и кратким контекстом",
+      "detection_mode": "hybrid",
+      "hybrid_check": { "task": "has_meaningful_intro" },
+      "comment_templates": {
+        "pass": "Введение выглядит содержательным.",
+        "fail": "Расширь введение: контекст данных и формулировка цели."
+      }
+    },
+    {
+      "code": "dataframe_diagnostics_present",
+      "category": "data_quality",
+      "applies_to": "ipynb",
+      "severity": "warning",
+      "title": "Есть базовая диагностика датафрейма",
+      "description": "После загрузки данных полезно показать head/info/describe",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": ["code_cell"],
+        "patterns_any": [".head(", ".info(", ".describe("]
+      },
+      "comment_templates": {
+        "pass": "Базовая диагностика датафрейма есть.",
+        "fail": "Желательно показать базовую диагностику датафрейма: head(), info() или describe()."
+      }
+    },
+    {
+      "code": "duplicates_check",
+      "category": "data_quality",
+      "applies_to": "ipynb",
+      "severity": "required",
+      "title": "Есть проверка на дубликаты",
+      "description": "В проекте должна быть проверка данных на дубликаты",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": ["code_cell"],
+        "patterns_any": [".duplicated(", "duplicated().sum(", "drop_duplicates("]
+      },
+      "comment_templates": {
+        "pass": "Проверка дубликатов найдена.",
+        "fail": "Нужно добавить явную проверку данных на дубликаты."
+      }
+    },
+    {
+      "code": "missing_values_check",
+      "category": "data_quality",
+      "applies_to": "ipynb",
+      "severity": "warning",
+      "title": "Есть проверка пропусков",
+      "description": "Желательно проверить пропущенные значения",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": ["code_cell"],
+        "patterns_any": [".isna(", ".isnull(", "isna().sum(", "isnull().sum("]
+      },
+      "comment_templates": {
+        "pass": "Проверка пропусков найдена.",
+        "fail": "Желательно добавить проверку пропусков, например через isna().sum()."
+      }
+    },
+    {
+      "code": "has_eda_conclusion",
+      "category": "analysis",
+      "applies_to": "ipynb",
+      "severity": "warning",
+      "title": "Есть интерпретация после EDA",
+      "description": "После графиков полезно пояснить, что видно по данным",
+      "detection_mode": "hybrid",
+      "hybrid_check": { "task": "has_eda_conclusion" },
+      "comment_templates": {
+        "pass": "Найдена интерпретация в блоке EDA.",
+        "fail": "Добавь краткую интерпретацию после визуализаций или исследовательских шагов."
+      }
+    },
+    {
+      "code": "has_modeling_conclusion",
+      "category": "analysis",
+      "applies_to": "ipynb",
+      "severity": "warning",
+      "title": "Есть выводы по моделированию",
+      "description": "После обучения модели ожидается краткий вывод",
+      "detection_mode": "hybrid",
+      "hybrid_check": { "task": "has_modeling_conclusion" },
+      "comment_templates": {
+        "pass": "Есть текстовые выводы по моделированию.",
+        "fail": "Если есть модель, добавь краткий вывод по качеству и интерпретации."
+      }
+    },
+    {
+      "code": "has_final_conclusion",
+      "category": "analysis",
+      "applies_to": "ipynb",
+      "severity": "warning",
+      "title": "Финальный вывод",
+      "description": "В конце ноутбука должен быть итоговый markdown-вывод",
+      "detection_mode": "hybrid",
+      "hybrid_check": { "task": "has_final_conclusion" },
+      "comment_templates": {
+        "pass": "Финальный вывод найден.",
+        "fail": "Добавь итоговый вывод в markdown с ключевыми инсайтами."
+      }
+    },
+    {
+      "code": "markdown_conclusion_present",
+      "category": "analysis",
+      "applies_to": "ipynb",
+      "severity": "warning",
+      "title": "Есть содержательный вывод в markdown",
+      "description": "После анализа полезно сформулировать краткий вывод текстом",
+      "detection_mode": "hybrid",
+      "hybrid_check": { "task": "has_markdown_conclusion" },
+      "comment_templates": {
+        "pass": "Текстовый вывод найден.",
+        "fail": "Добавь краткий содержательный вывод по результатам анализа в markdown-ячейке."
+      }
+    }
+  ]
+}

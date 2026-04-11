@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ассистент по проекту</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; }
+    body { max-width: 42rem; margin: 1.5rem auto; padding: 0 1rem; color: #1a1a1a; }
+    h1 { font-size: 1.25rem; }
+    #log { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; min-height: 12rem; background: #fafafa; white-space: pre-wrap; font-size: 0.9rem; }
+    .row { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+    input[type="text"] { flex: 1; padding: 0.5rem 0.65rem; border-radius: 6px; border: 1px solid #bbb; }
+    button { padding: 0.5rem 1rem; border-radius: 6px; border: none; background: #2563eb; color: #fff; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .meta { font-size: 0.8rem; color: #555; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Ассистент по проекту</h1>
+  <p class="meta">project_id: <code>__PROJECT_ID__</code></p>
+  <div id="log"></div>
+  <div class="row">
+    <input type="text" id="q" placeholder="Вопрос по ТЗ или материалам…" autocomplete="off" />
+    <button type="button" id="send">Спросить</button>
+  </div>
+  <script>
+    const projectId = "__PROJECT_ID__";
+    const logEl = document.getElementById("log");
+    const input = document.getElementById("q");
+    const btn = document.getElementById("send");
+
+    function append(role, text) {
+      logEl.textContent += (logEl.textContent ? "\n\n" : "") + "[" + role + "]\n" + text;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    async function send() {
+      const message = input.value.trim();
+      if (!message) return;
+      btn.disabled = true;
+      append("вы", message);
+      input.value = "";
+      try {
+        const res = await fetch("/api/v1/projects/" + projectId + "/assistant/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          append("ошибка", (data.detail && JSON.stringify(data.detail)) || res.statusText);
+          return;
+        }
+        let out = data.answer || "";
+        if (data.needs_teacher) out += "\n\n(рекомендуется уточнить у преподавателя)";
+        if (data.sources && data.sources.length) {
+          out += "\n\n— Источники —";
+          data.sources.forEach((s, i) => {
+            out += "\n" + (i + 1) + ". " + s.label + " [" + s.source_kind + "]";
+          });
+        }
+        append("ассистент", out);
+      } catch (e) {
+        append("ошибка", String(e));
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    btn.addEventListener("click", send);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") send();
+    });
+  </script>
+</body>
+</html>

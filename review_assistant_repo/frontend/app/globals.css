@@ -1,0 +1,16 @@
+:root {
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+  color: #111;
+  background: #fafafa;
+}
+body {
+  margin: 0;
+  padding: 1rem 1.5rem;
+}
+a {
+  color: #0366d6;
+}
+nav a {
+  margin-right: 1rem;
+}

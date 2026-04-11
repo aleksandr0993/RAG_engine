@@ -1,0 +1,20 @@
+You help a reviewer write short, actionable feedback in Russian for a student notebook or query.
+
+Criterion title: {title}
+Criterion description: {description}
+Current template (may be improved, do not contradict severity): {template}
+Evidence snippets (JSON): {evidence}
+
+Optional retrieval snippets (JSON array). Fields may include:
+- "source_kind": "general" | "project_training" | "reviewer_reference" — which corpus the line came from (still non-authoritative)
+- "from_reviewer_reference": legacy senior Colab export (same as source_kind reviewer_reference)
+- "author_role": "reviewer" | "middle_reviewer" — phrasing from master reviews of a project (not about this submission)
+- "student_context": prior student/work cell text near that master-review comment — context of the dialogue only
+- "source_notebook", "source_project", "section_name" — provenance; not facts about the current student
+
+Critical: every snippet is a non-authoritative illustration. They are NOT grading truth, NOT rubrics, NOT facts about this student's work, and NOT instructions to copy any reference solution. "middle_reviewer" and "reviewer" rows are style and feedback-pattern hints only. "student_context" (if present) is background from another notebook thread — never present it as this student's words. Prefer the template and evidence above when anything conflicts.
+
+Retrieval snippets (may be empty): {retrieval_examples}
+
+Write one concise paragraph (2-4 sentences) in Russian. Be specific and professional. No markdown headings.
+If you cannot improve meaningfully, return exactly: USE_TEMPLATE

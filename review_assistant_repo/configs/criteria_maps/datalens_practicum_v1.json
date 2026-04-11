@@ -1,0 +1,141 @@
+{
+  "criteria": [
+    {
+      "code": "datalens_url_quality",
+      "category": "technical",
+      "applies_to": "datalens",
+      "severity": "required",
+      "title": "Ссылка похожа на DataLens",
+      "description": "Нужно получать валидную DataLens-ссылку",
+      "detection_mode": "visual",
+      "visual_check": {
+        "task": "datalens_url_quality"
+      },
+      "comment_templates": {
+        "pass": "DataLens URL выглядит корректно.",
+        "fail": "Ссылка не похожа на DataLens URL."
+      }
+    },
+    {
+      "code": "datalens_capture_ready",
+      "category": "technical",
+      "applies_to": "datalens",
+      "severity": "warning",
+      "title": "Capture-слой готов",
+      "description": "Даже если capture отключён, система должна честно это отразить",
+      "detection_mode": "visual",
+      "visual_check": {
+        "task": "datalens_capture_ready"
+      },
+      "comment_templates": {
+        "pass": "Capture для DataLens доступен.",
+        "fail": "Capture для DataLens пока не выполнен или отключён."
+      }
+    },
+    {
+      "code": "datalens_capture_artifacts_present",
+      "category": "visualization",
+      "applies_to": "datalens",
+      "severity": "warning",
+      "title": "Скриншоты capture сохранены как артефакты",
+      "description": "При реальном capture система должна сохранять screenshot-файлы как project files",
+      "detection_mode": "visual",
+      "visual_check": {
+        "task": "datalens_capture_artifacts_present"
+      },
+      "comment_templates": {
+        "pass": "Скриншоты DataLens сохранены.",
+        "fail": "Пока нет сохранённых screenshot-артефактов DataLens."
+      }
+    },
+    {
+      "code": "datalens_regions_inferred",
+      "category": "visualization",
+      "applies_to": "datalens",
+      "severity": "warning",
+      "title": "Из текста capture выведены region-сигналы",
+      "description": "Даже без полноценного CV полезно строить region-like артефакты по фрагментам текста",
+      "detection_mode": "visual",
+      "visual_check": {
+        "task": "datalens_regions_inferred"
+      },
+      "comment_templates": {
+        "pass": "Region-сигналы DataLens выведены.",
+        "fail": "Пока не удалось построить region-like артефакты для DataLens."
+      }
+    },
+    {
+      "code": "datalens_image_regions_extracted",
+      "category": "visualization",
+      "applies_to": "datalens",
+      "severity": "warning",
+      "title": "Из capture-изображений выделены image-регионы",
+      "description": "При наличии screenshot полезно строить image-based регионы по самому изображению",
+      "detection_mode": "visual",
+      "visual_check": {
+        "task": "datalens_image_regions_extracted"
+      },
+      "comment_templates": {
+        "pass": "Image-based регионы DataLens найдены.",
+        "fail": "Пока не удалось выделить image-based регионы DataLens capture."
+      }
+    },
+    {
+      "code": "datalens_capture_overlays_saved",
+      "category": "visualization",
+      "applies_to": "datalens",
+      "severity": "warning",
+      "title": "Сохранены overlay-изображения DataLens",
+      "description": "Для визуальной верификации полезно сохранять capture overlay с bounding boxes",
+      "detection_mode": "visual",
+      "visual_check": {
+        "task": "datalens_capture_overlays_saved"
+      },
+      "comment_templates": {
+        "pass": "Overlay-изображения DataLens сохранены.",
+        "fail": "Пока не сохранены overlay-изображения DataLens capture."
+      }
+    },
+    {
+      "code": "datalens_overlay_generated",
+      "category": "visualization",
+      "applies_to": "datalens",
+      "severity": "warning",
+      "title": "Overlay для capture",
+      "description": "Overlay PNG saved for capture screenshots when segmentation runs",
+      "detection_mode": "visual",
+      "visual_check": { "task": "overlay_generated" },
+      "comment_templates": {
+        "pass": "Overlay для скриншотов найден.",
+        "fail": "Overlay для визуальной проверки не сохранён."
+      }
+    },
+    {
+      "code": "datalens_low_text_quality",
+      "category": "data_quality",
+      "applies_to": "datalens",
+      "severity": "warning",
+      "title": "Короткий извлечённый текст",
+      "description": "Many text fragments are very short after capture",
+      "detection_mode": "visual",
+      "visual_check": { "task": "low_text_extraction_quality" },
+      "comment_templates": {
+        "pass": "Текст со страницы извлечён.",
+        "fail": "Мало текста после capture — возможны проблемы рендера или доступа."
+      }
+    },
+    {
+      "code": "datalens_business_interpretation",
+      "category": "presentation",
+      "applies_to": "datalens",
+      "severity": "warning",
+      "title": "Бизнес-интерпретация (текст capture)",
+      "detection_mode": "hybrid",
+      "hybrid_check": { "task": "has_business_interpretation_text" },
+      "comment_templates": {
+        "pass": "В тексте есть признаки интерпретации.",
+        "fail": "Добавь пояснения к метрикам в самом дашборде."
+      }
+    }
+  ]
+}

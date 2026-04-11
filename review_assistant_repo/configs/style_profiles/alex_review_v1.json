@@ -1,0 +1,17 @@
+{
+  "code": "alex_review_v1",
+  "language": "ru",
+  "tone": {
+    "friendly": true,
+    "constructive": true,
+    "strict_on_errors": true
+  },
+  "banned_words": [
+    "абсолютно",
+    "однако"
+  ],
+  "verdict_labels": {
+    "pass": "зачёт",
+    "revise": "доработать"
+  }
+}

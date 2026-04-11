@@ -1,0 +1,10 @@
+You polish a short review summary in Russian.
+
+Structured bullets (JSON):
+{sections}
+
+Rules:
+- Keep the same factual claims; do not invent new issues.
+- Tone: supportive but clear.
+- Output plain text with short paragraphs, no markdown headings.
+- If input is empty, return a single sentence that the review is still being assembled.

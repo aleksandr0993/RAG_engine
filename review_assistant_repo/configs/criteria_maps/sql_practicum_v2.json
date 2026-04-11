@@ -1,0 +1,108 @@
+{
+  "criteria": [
+    {
+      "code": "has_select_statement",
+      "category": "technical",
+      "applies_to": "sql",
+      "severity": "required",
+      "title": "В запросе есть SELECT",
+      "description": "Ожидается SQL-запрос с SELECT",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": ["sql_query"],
+        "patterns_any": ["select"]
+      },
+      "comment_templates": {
+        "pass": "SELECT найден.",
+        "fail": "Похоже, в файле не найден корректный SELECT-запрос."
+      }
+    },
+    {
+      "code": "nullif_division_guard",
+      "category": "technical",
+      "applies_to": "sql",
+      "severity": "required",
+      "title": "Есть защита от деления на ноль",
+      "description": "Если в запросе есть деление, добавь NULLIF(..., 0)",
+      "detection_mode": "hybrid",
+      "hybrid_check": { "task": "dangerous_division_guard" },
+      "comment_templates": {
+        "pass": "Защита через NULLIF найдена.",
+        "fail": "Если в запросе есть деление, добавь защиту от деления на ноль через NULLIF(..., 0)."
+      }
+    },
+    {
+      "code": "division_without_nullif",
+      "category": "technical",
+      "applies_to": "sql",
+      "severity": "required",
+      "title": "AST: небезопасное деление",
+      "description": "Деление без NULLIF на знаменателе",
+      "detection_mode": "hybrid",
+      "hybrid_check": { "task": "division_without_nullif" },
+      "comment_templates": {
+        "pass": "Потенциально опасных делений не найдено.",
+        "fail": "Обнаружено деление без NULLIF/безопасного делителя — см. подсказку в evidence."
+      }
+    },
+    {
+      "code": "join_logic_present",
+      "category": "technical",
+      "applies_to": "sql",
+      "severity": "warning",
+      "title": "Есть логика объединения таблиц",
+      "description": "Если задача многотабличная, проверь корректность JOIN",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": ["sql_query"],
+        "patterns_any": [" join "]
+      },
+      "comment_templates": {
+        "pass": "JOIN найден.",
+        "fail": "Если задача требует объединения таблиц, проверь наличие и корректность JOIN."
+      }
+    },
+    {
+      "code": "risky_left_join",
+      "category": "technical",
+      "applies_to": "sql",
+      "severity": "warning",
+      "title": "Цепочка LEFT JOIN",
+      "description": "Несколько LEFT JOIN могут размножать строки",
+      "detection_mode": "hybrid",
+      "hybrid_check": { "task": "risky_left_join" },
+      "comment_templates": {
+        "pass": "Риск размножения строк по JOIN выглядит умеренным.",
+        "fail": "Проверь цепочку LEFT JOIN и ключи — возможно размножение строк."
+      }
+    },
+    {
+      "code": "suspicious_group_by",
+      "category": "technical",
+      "applies_to": "sql",
+      "severity": "warning",
+      "title": "GROUP BY vs SELECT",
+      "description": "Несоответствие GROUP BY и столбцов SELECT",
+      "detection_mode": "hybrid",
+      "hybrid_check": { "task": "suspicious_group_by" },
+      "comment_templates": {
+        "pass": "GROUP BY согласован с SELECT (эвристика).",
+        "fail": "Похоже, в SELECT есть столбцы вне GROUP BY — нужен ручной разбор."
+      }
+    },
+    {
+      "code": "metric_definition_consistency",
+      "category": "analysis",
+      "applies_to": "sql",
+      "severity": "warning",
+      "title": "Согласованность метрик",
+      "description": "Проверка формулировок метрик (LLM при включении)",
+      "detection_mode": "hybrid",
+      "hybrid_check": { "task": "metric_definition_consistency" },
+      "comment_templates": {
+        "pass": "Метрики выглядят согласованно.",
+        "fail": "Проверь определения метрик и фильтры — возможны противоречия."
+      }
+    }
+  ]
+}
