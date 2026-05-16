@@ -74,14 +74,15 @@
           "markdown_cell"
         ],
         "patterns_all": [
-          "пропуск",
           "тип"
         ],
         "patterns_any": [
           "обнаруж",
           "видно",
           "содержит",
-          "содержится"
+          "содержится",
+          "столб",
+          "строк"
         ],
         "min_normalized_length": 80
       },
@@ -104,8 +105,8 @@
         ],
         "patterns_all": [
           ".columns",
-          ".str.lower",
-          "str.replace"
+          ".lower(",
+          ".replace("
         ]
       },
       "comment_templates": {
@@ -148,6 +149,7 @@
       "description": "Нужно показать количество пропусков по столбцам и их долю.",
       "detection_mode": "rule",
       "rule": {
+        "match_scope": "project",
         "artifact_types": [
           "code_cell"
         ],

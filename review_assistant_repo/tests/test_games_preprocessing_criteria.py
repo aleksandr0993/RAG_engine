@@ -239,3 +239,46 @@ def test_games_preprocessing_accepts_split_overview_and_groupby_top7(client, tmp
     by_code = {row["criterion_code"]: row["status"] for row in rows}
     assert by_code["games_initial_overview"] == "pass"
     assert by_code["games_top7_platforms"] == "pass"
+
+
+def test_games_preprocessing_accepts_reviewer_pair_patterns(client, tmp_path):
+    notebook_path = tmp_path / "games_pair_patterns.ipynb"
+    _write_games_project_notebook(notebook_path)
+    data = json.loads(notebook_path.read_text(encoding="utf-8"))
+    data["cells"][3]["source"] = [
+        "df.columns = [x.lower().replace(' ', '_') for x in df.columns.values]\n",
+        "df['eu_sales'] = pd.to_numeric(df['eu_sales'], errors='coerce')\n",
+        "df['jp_sales'] = pd.to_numeric(df['jp_sales'], errors='coerce')\n",
+        "df['user_score'] = pd.to_numeric(df['user_score'], errors='coerce')\n",
+        "df['critic_score'] = pd.to_numeric(df['critic_score'], errors='coerce')",
+    ]
+    data["cells"][4]["source"] = ["pd.DataFrame(df.isna().sum()).style.background_gradient('coolwarm')"]
+    data["cells"].insert(
+        5,
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "id": "games-missing-relative",
+            "source": ["pd.DataFrame(round(df.isna().mean() * 100, 2)).style.background_gradient('coolwarm')"],
+        },
+    )
+    notebook_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    with notebook_path.open("rb") as f:
+        upload = client.post(
+            "/api/v1/projects/upload",
+            data={"criteria_map_code": "notebook_games_preprocessing_v1"},
+            files={"file": (notebook_path.name, f, "application/x-ipynb+json")},
+        )
+    assert upload.status_code == 200, upload.text
+    project_id = upload.json()["project_id"]
+
+    review = client.post(f"/api/v1/projects/{project_id}/review")
+    assert review.status_code == 200, review.text
+
+    rows = client.get(f"/api/v1/projects/{project_id}/findings").json()
+    by_code = {row["criterion_code"]: row["status"] for row in rows}
+    assert by_code["games_columns_snake_case"] == "pass"
+    assert by_code["games_missing_values_quantified"] == "pass"
