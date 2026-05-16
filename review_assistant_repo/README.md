@@ -68,6 +68,43 @@ uvicorn app.main:app --reload
 
 Swagger: `http://127.0.0.1:8000/docs`
 
+### Smoke test (upload → review → review_result)
+
+Сервер должен быть уже запущен (`uvicorn ...`). Из каталога `review_assistant_repo`:
+
+```bash
+bash scripts/smoke_notebook_review.sh
+# или
+REVIEW_API_BASE=http://127.0.0.1:8000 bash scripts/smoke_notebook_review.sh
+```
+
+Скрипт использует `examples/sample_notebook.ipynb` и завершится с ошибкой, если в ответе `review_result` нет `final_verdict`.
+
+### Reset local SQLite database (dev)
+
+Если используется SQLite по умолчанию (`DATABASE_URL=sqlite:///./data/review_assistant.db` в `.env.example`):
+
+1. Остановите процесс `uvicorn`.
+2. Удалите файл базы по пути из `DATABASE_URL` (часто `./data/review_assistant.db` относительно текущей рабочей директории при запуске).
+3. Запустите API снова — при `USE_ALEMBIC_MIGRATIONS=true` выполнится `alembic upgrade head` (или fallback `create_all`).
+
+### Public staging / security (minimum)
+
+Для **любого окружения**, где API доступен не только доверенным разработчикам в локальной сети:
+
+| Переменная | Рекомендация |
+|------------|----------------|
+| `REQUIRE_AUTH_FOR_WRITES` | `true` — загрузка и мутации только с валидным Supabase JWT |
+| `REQUIRE_AUTH_FOR_DEBUG_ROUTES` | `true` — закрыть `GET/POST /api/v1/debug/*` и `.../projects/{id}/debug/*` |
+| `SUPABASE_JWT_SECRET` или `SUPABASE_JWKS_URL` | Нужны для проверки JWT (см. `app/auth/supabase_jwt.py`) |
+| `REQUIRE_AUTH_FOR_RL_WRITES` | `true`, если включён `ENABLE_RL_ENGINE` и RL endpoints доступны извне |
+
+Подробности по debug по умолчанию — в секции **API (explorer & debug)** ниже.
+
+### Semantic / visual analyzers: `unknown` и `metadata.note`
+
+Для части **hybrid / semantic / visual** задач в `app/analyzers/semantic.py` и `app/analyzers/visual.py` если задача (`task`) **не распознана** реализованными ветками, результат — `status: "unknown"`, низкая `confidence`, `metadata.source_stage` = `semantic` или `visual`, и `metadata.note` = `"not implemented"`. Это **не сбой HTTP**: критерий помечается как неподтверждённый автоматикой; при `severity: required` срабатывает политика качества (`FINDING_*` в `.env.example`). См. также колонку `source_stage` у findings в разделе **Outputs** выше.
+
 ### Optional CORS (SPA на другом origin)
 
 В `.env`: **`CORS_ALLOWED_ORIGINS`** — список origin через запятую (например `http://localhost:3000,https://app.example.com`). Пусто — middleware не подключается. Для подходящего `Origin` браузер увидит **`Access-Control-Expose-Headers`** с `X-Total-Count`, `X-Total-Count-Truncated`, `X-Next-Cursor` (пагинация `GET /api/v1/projects`). **`CORS_ALLOW_CREDENTIALS`** — по умолчанию `false` (при `true` нельзя использовать `*` в origins).
@@ -162,6 +199,27 @@ python scripts/build_review_training_corpus.py \
 5. **Секция**: для `.ipynb` примеры из корпуса сортируются по совпадению `section_name` с секцией якорной ячейки критерия.
 
 См. `notebooks/colab_project_training_batch.ipynb` для Colab.
+
+### Project-specific briefs: Practicum Wiki HTML → course KB
+
+Если у вас есть сохранённая HTML-страница с описанием проекта Практикума, её можно превратить в чистый текст для `STUDENT_COURSE_KB_DIR`:
+
+```bash
+python scripts/wiki_html_to_course_kb.py \
+  /path/to/wiki-python-basics.html \
+  --output ./data/course_kb/wiki-python-basics.md \
+  --metadata-json ./data/course_kb/wiki-python-basics.meta.json
+```
+
+Для проекта спринта 7 «Предобработка данных» добавлен отдельный критерий-карта:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/projects/upload \
+  -F "file=@student_project.ipynb" \
+  -F "criteria_map_code=notebook_games_preprocessing_v1"
+```
+
+Карта проверяет проектные сигналы по датасету `new_games.csv`: первичное знакомство, `snake_case`, типы оценок, пропуски, дубликаты, фильтр 2000–2013, категории оценок, top-7 платформ и выводы.
 
 ### Справочник типичных комментариев ревьюера (много `.ipynb`)
 

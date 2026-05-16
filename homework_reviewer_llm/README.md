@@ -14,6 +14,11 @@
 | `training/` | `train_qlora.py`, Docker, sweep-скрипт |
 | [templates/blind_review_form.md](templates/blind_review_form.md) | Форма слепого сравнения |
 | [experiments/EXPERIMENT_REPORT.md](experiments/EXPERIMENT_REPORT.md) | Шаблон отчёта |
+| [fixtures/](fixtures/) | Мини-шаблоны и демо-файлы, **закоммиченные в git** (для CI и чистого клона) |
+
+### Локальный каталог `data/` и git
+
+Корневой [.gitignore](../.gitignore) игнорирует `**/data/` и `**/runs/`: выходы пайплайна (`data/processed`, `data/sft`, …) **не попадают в репозиторий**. Для быстрого старта без ручной подготовки используйте файлы из [`fixtures/`](fixtures/): скопируйте их в свой `data/...` или указывайте пути к `fixtures/` в командах ниже.
 
 ## Установка
 
@@ -27,16 +32,17 @@ pip install -e ".[train]"
 
 ## 1. Формат сырых данных (JSONL)
 
-Одна строка = один объект полей `RawHomeworkRecord` (см. `src/homework_reviewer_llm/schema.py`). Опционально: `revision_history`, `student_profile`. Шаблон одной записи (для сбора с нуля): [data/templates/raw_homework_record.example.json](data/templates/raw_homework_record.example.json). Демо-набор: [data/samples/raw_homework.jsonl](data/samples/raw_homework.jsonl).
+Одна строка = один объект полей `RawHomeworkRecord` (см. `src/homework_reviewer_llm/schema.py`). Опционально: `revision_history`, `student_profile`. Шаблон одной записи (для сбора с нуля): [fixtures/raw_homework_record.example.json](fixtures/raw_homework_record.example.json) (в git; при желании скопируйте в `data/templates/`). Демо-набор для тестов/CI: [fixtures/raw_homework.jsonl](fixtures/raw_homework.jsonl).
 
 ### Ручная выгрузка ревьюера (таблица → JSONL)
 
-1. Скопируйте заголовок из [data/templates/reviewer_manual_export.csv](data/templates/reviewer_manual_export.csv) в Excel / Google Sheets.
+1. Скопируйте заголовок из [fixtures/reviewer_manual_export.csv](fixtures/reviewer_manual_export.csv) (или из вашего `data/templates/`, если вы ведёте шаблоны локально) в Excel / Google Sheets.
 2. Заполняйте строки: обязательны `id`, `student_id`, `assignment_id`, `submission_text`, `review_text`, `overall_score`. Длинный текст и переносы строк — внутри одной ячейки (Excel это поддерживает).
 3. Сохраните как **CSV UTF-8** (в Excel: «CSV UTF-8 (разделители — запятые)»).
 4. Конвертация:
 
 ```bash
+mkdir -p data/raw
 python scripts/csv_to_raw_jsonl.py --input path/to/reviewers.csv --output data/raw/from_reviewers.jsonl
 ```
 

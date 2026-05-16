@@ -27,7 +27,14 @@ def test_row_to_record_dict_roundtrip() -> None:
     assert d["rubric_scores"] == {"x": 1}
 
 
-@pytest.mark.skipif(not (ROOT / "data/templates/reviewer_manual_export.csv").exists(), reason="template")
+_TEMPLATE_CSV = (
+    ROOT / "data" / "templates" / "reviewer_manual_export.csv"
+    if (ROOT / "data" / "templates" / "reviewer_manual_export.csv").exists()
+    else (ROOT / "fixtures" / "reviewer_manual_export.csv")
+)
+
+
+@pytest.mark.skipif(not _TEMPLATE_CSV.exists(), reason="template")
 def test_template_csv_converts() -> None:
     out = ROOT / "tests" / "_tmp_from_template.jsonl"
     try:
@@ -36,7 +43,7 @@ def test_template_csv_converts() -> None:
                 sys.executable,
                 str(ROOT / "scripts" / "csv_to_raw_jsonl.py"),
                 "--input",
-                str(ROOT / "data/templates/reviewer_manual_export.csv"),
+                str(_TEMPLATE_CSV),
                 "--output",
                 str(out),
             ],

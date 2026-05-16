@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-SAMPLE = ROOT / "data" / "samples" / "raw_homework.jsonl"
+_LEGACY_SAMPLE = ROOT / "data" / "samples" / "raw_homework.jsonl"
+SAMPLE = _LEGACY_SAMPLE if _LEGACY_SAMPLE.exists() else (ROOT / "fixtures" / "raw_homework.jsonl")
 
 
 @pytest.mark.skipif(not SAMPLE.exists(), reason="sample missing")

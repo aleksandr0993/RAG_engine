@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  review_assistant:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: review_assistant_repo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package and dev tools
+        run: pip install -e ".[dev]"
+      - name: Ruff
+        run: ruff check app tests
+      - name: Mypy
+        run: mypy app
+      - name: Pytest
+        run: pytest tests/ -q
+      - name: README vs OpenAPI
+        run: python scripts/check_readme_endpoints.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: review_assistant_repo/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: review_assistant_repo/frontend/package-lock.json
+      - run: npm ci
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+      - run: npm run lint
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+  homework_reviewer_llm:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: homework_reviewer_llm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: pip install -e .
+      - name: Pytest
+        run: pytest tests/ -q

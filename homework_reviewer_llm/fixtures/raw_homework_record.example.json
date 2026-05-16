@@ -1,0 +1,11 @@
+{
+  "id": "fixture_record_001",
+  "student_id": "student_fixture_1",
+  "assignment_id": "assignment_fixture_a",
+  "submission_text": "Пример текста работы для локального теста пайплайна.",
+  "review_text": "Пример текста ревью: структура ок, добавьте выводы по метрикам.",
+  "overall_score": 7.5,
+  "task_type": "analytics",
+  "language": "ru",
+  "rubric_scores": {"structure": 2, "technical": 3}
+}

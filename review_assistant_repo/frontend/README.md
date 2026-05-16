@@ -7,7 +7,7 @@ Minimal UI for the FastAPI backend: dashboard (project list), upload, project de
 ```bash
 cd frontend
 cp .env.local.example .env.local
-npm install
+npm ci
 npm run dev
 ```
 
