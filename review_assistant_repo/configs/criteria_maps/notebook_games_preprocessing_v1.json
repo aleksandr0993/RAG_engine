@@ -47,6 +47,7 @@
       "description": "Нужно вывести первые строки и info() по датафрейму.",
       "detection_mode": "rule",
       "rule": {
+        "match_scope": "project",
         "artifact_types": [
           "code_cell"
         ],
@@ -72,12 +73,15 @@
         "artifact_types": [
           "markdown_cell"
         ],
-        "patterns_any": [
-          "объём",
-          "объем",
+        "patterns_all": [
           "пропуск",
-          "тип",
-          "столб"
+          "тип"
+        ],
+        "patterns_any": [
+          "обнаруж",
+          "видно",
+          "содержит",
+          "содержится"
         ],
         "min_normalized_length": 80
       },
@@ -173,10 +177,17 @@
         "patterns_any": [
           "fillna",
           "dropna",
-          "остав",
-          "замен",
-          "удал",
+          "оставить",
+          "оставляем",
+          "оставлены",
+          "заменить",
+          "заменены",
+          "заменён",
+          "заменен",
           "индикатор"
+        ],
+        "patterns_all": [
+          "пропуск"
         ],
         "min_normalized_length": 40
       },
@@ -287,13 +298,18 @@
       "detection_mode": "rule",
       "rule": {
         "artifact_types": [
-          "code_cell",
-          "markdown_cell"
+          "code_cell"
+        ],
+        "match_scope": "project",
+        "patterns_any": [
+          "apply",
+          "pd.cut",
+          "score_category",
+          "critic_category"
         ],
         "patterns_all": [
-          "высок",
-          "средн",
-          "низк"
+          "user_score",
+          "critic_score"
         ]
       },
       "comment_templates": {
@@ -313,9 +329,12 @@
         "artifact_types": [
           "code_cell"
         ],
+        "patterns_any": [
+          "value_counts",
+          "groupby"
+        ],
         "patterns_all": [
           "platform",
-          "value_counts",
           "head(7"
         ]
       },
@@ -333,7 +352,7 @@
       "description": "В конце проекта нужен текстовый вывод по результатам предобработки и полученному срезу данных.",
       "detection_mode": "hybrid",
       "hybrid_check": {
-        "task": "has_markdown_conclusion"
+        "task": "has_final_conclusion"
       },
       "comment_templates": {
         "pass": "Финальный вывод найден.",

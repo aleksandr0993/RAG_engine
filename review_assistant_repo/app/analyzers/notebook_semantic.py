@@ -9,11 +9,18 @@ _CONC_WORDS = re.compile(
     r"вывод|итог|заключ|результат|объясн|интерпрет|можно сказать|следовательно",
     re.IGNORECASE,
 )
-_INTRO_WORDS = re.compile(r"цель|задач|данн|проект|описание|введен", re.IGNORECASE)
+_INTRO_WORDS = re.compile(r"цель|задач|данн|описание|введен", re.IGNORECASE)
+
+
+def _ignored_artifact(artifact: dict) -> bool:
+    meta = artifact.get("metadata_json") or artifact.get("metadata") or {}
+    return bool(meta.get("is_practicum_instruction") or meta.get("is_reviewer_comment") or meta.get("is_middle_reviewer_comment"))
 
 
 def _heuristic_intro(artifacts: list[dict], criterion: dict | None = None) -> dict:
     for a in artifacts:
+        if _ignored_artifact(a):
+            continue
         if a.get("artifact_type") != "markdown_cell":
             continue
         text = a.get("normalized_text") or ""
@@ -41,6 +48,8 @@ def _markdown_after_plot(artifacts: list[dict], section: str | None, label: str)
     """Find markdown cell after a code cell with plot in/near section."""
     ordered = sorted([a for a in artifacts if a.get("position_idx") is not None], key=lambda x: x["position_idx"])
     for i, a in enumerate(ordered):
+        if _ignored_artifact(a):
+            continue
         if a.get("artifact_type") != "code_cell":
             continue
         meta = a.get("metadata_json") or a.get("metadata") or {}
@@ -50,6 +59,8 @@ def _markdown_after_plot(artifacts: list[dict], section: str | None, label: str)
             continue
         for j in range(i + 1, min(i + 4, len(ordered))):
             nxt = ordered[j]
+            if _ignored_artifact(nxt):
+                continue
             if nxt.get("artifact_type") != "markdown_cell":
                 continue
             t = nxt.get("normalized_text") or ""
@@ -62,6 +73,8 @@ def _markdown_after_plot(artifacts: list[dict], section: str | None, label: str)
 
 def _section_conclusion(artifacts: list[dict], section: str, code: str) -> dict:
     for a in artifacts:
+        if _ignored_artifact(a):
+            continue
         if a.get("artifact_type") != "markdown_cell":
             continue
         if (a.get("section_name") or "") != section:
@@ -146,7 +159,7 @@ def run_notebook_semantic(
             text = "\n\n".join(
                 (a.get("normalized_text") or "")[:1200]
                 for a in artifacts
-                if a.get("artifact_type") == "markdown_cell" and (a.get("position_idx") or 0) <= 2
+                if a.get("artifact_type") == "markdown_cell" and (a.get("position_idx") or 0) <= 2 and not _ignored_artifact(a)
             )
             r = llm.classify_text(task, text, {"sections": [a.get("section_name") for a in artifacts[:5]]})
             return _merge_llm({**base, "metadata": {**base["metadata"], "source_stage": "semantic"}}, r, criterion, task)
@@ -157,7 +170,11 @@ def run_notebook_semantic(
         base = _section_conclusion(artifacts, "eda", "has_eda_conclusion")
         base["metadata"]["criterion_code"] = "has_eda_conclusion"
         if llm.semantic_checks_enabled:
-            blob = "\n".join((a.get("normalized_text") or "")[:800] for a in artifacts if a.get("section_name") == "eda")
+            blob = "\n".join(
+                (a.get("normalized_text") or "")[:800]
+                for a in artifacts
+                if a.get("section_name") == "eda" and not _ignored_artifact(a)
+            )
             r = llm.classify_text(task, blob, {})
             return _merge_llm(base, r, criterion, task)
         base["metadata"]["source_stage"] = "semantic"
@@ -167,7 +184,11 @@ def run_notebook_semantic(
         base = _section_conclusion(artifacts, "modeling", "has_modeling_conclusion")
         base["metadata"]["criterion_code"] = "has_modeling_conclusion"
         if llm.semantic_checks_enabled:
-            blob = "\n".join((a.get("normalized_text") or "")[:800] for a in artifacts if a.get("section_name") == "modeling")
+            blob = "\n".join(
+                (a.get("normalized_text") or "")[:800]
+                for a in artifacts
+                if a.get("section_name") == "modeling" and not _ignored_artifact(a)
+            )
             r = llm.classify_text(task, blob, {})
             return _merge_llm(base, r, criterion, task)
         base["metadata"]["source_stage"] = "semantic"
@@ -175,6 +196,8 @@ def run_notebook_semantic(
 
     if task == "has_final_conclusion":
         for a in reversed(artifacts):
+            if _ignored_artifact(a):
+                continue
             if a.get("artifact_type") != "markdown_cell":
                 continue
             t = a.get("normalized_text") or ""
@@ -199,7 +222,11 @@ def run_notebook_semantic(
             "metadata": {"criterion_code": "has_final_conclusion", "method": "heuristic"},
         }
         if llm.semantic_checks_enabled:
-            blob = "\n".join((a.get("normalized_text") or "")[:1200] for a in artifacts if a.get("artifact_type") == "markdown_cell")
+            blob = "\n".join(
+                (a.get("normalized_text") or "")[:1200]
+                for a in artifacts
+                if a.get("artifact_type") == "markdown_cell" and not _ignored_artifact(a)
+            )
             r = llm.classify_text(task, blob, {})
             return _merge_llm({**base, "metadata": {**base["metadata"], "source_stage": "semantic"}}, r, criterion, task)
         base["metadata"]["source_stage"] = "semantic"

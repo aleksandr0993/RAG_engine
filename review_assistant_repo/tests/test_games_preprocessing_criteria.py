@@ -183,3 +183,59 @@ def test_games_preprocessing_criteria_map_passes_representative_notebook(client,
     assert "games_dataset_loaded" in codes
     assert "games_actual_period_filter" in codes
     assert "games_top7_platforms" in codes
+
+
+def test_games_preprocessing_accepts_split_overview_and_groupby_top7(client, tmp_path):
+    notebook_path = tmp_path / "games_split_cells.ipynb"
+    _write_games_project_notebook(notebook_path)
+    data = json.loads(notebook_path.read_text(encoding="utf-8"))
+    data["cells"][1]["source"] = ["import pandas as pd\n", "df = pd.read_csv('/datasets/new_games.csv')"]
+    data["cells"].insert(
+        2,
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "id": "games-extra-head",
+            "source": ["df.head()"],
+        },
+    )
+    data["cells"].insert(
+        3,
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "id": "games-extra-info",
+            "source": ["df.info()"],
+        },
+    )
+    data["cells"][13]["source"] = [
+        "top_platforms = (\n",
+        "    df_actual.groupby('platform')['name']\n",
+        "    .count()\n",
+        "    .sort_values(ascending=False)\n",
+        "    .head(7)\n",
+        ")\n",
+        "display(top_platforms)",
+    ]
+    notebook_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    with notebook_path.open("rb") as f:
+        upload = client.post(
+            "/api/v1/projects/upload",
+            data={"criteria_map_code": "notebook_games_preprocessing_v1"},
+            files={"file": (notebook_path.name, f, "application/x-ipynb+json")},
+        )
+    assert upload.status_code == 200, upload.text
+    project_id = upload.json()["project_id"]
+
+    review = client.post(f"/api/v1/projects/{project_id}/review")
+    assert review.status_code == 200, review.text
+
+    rows = client.get(f"/api/v1/projects/{project_id}/findings").json()
+    by_code = {row["criterion_code"]: row["status"] for row in rows}
+    assert by_code["games_initial_overview"] == "pass"
+    assert by_code["games_top7_platforms"] == "pass"

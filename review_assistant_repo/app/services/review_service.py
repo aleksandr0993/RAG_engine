@@ -300,8 +300,7 @@ class ReviewService:
             else:
                 notebook_exec_meta = _notebook_exec_metadata_for_iteration(settings_nb, None)
 
-            parsed_artifacts, notebook_obj = self.notebook_parser.parse(parse_path)
-            notebook_obj = self.notebook_parser.clean_notebook(notebook_obj)
+            parsed_artifacts, notebook_obj = self.notebook_parser.parse(parse_path, strip_review_comments=True)
         elif project.source_type == "sql":
             if not original_file:
                 raise ValueError("SQL file not found")
