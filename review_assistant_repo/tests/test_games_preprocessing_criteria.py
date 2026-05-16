@@ -45,6 +45,8 @@ def _write_games_project_notebook(path: Path) -> None:
                 "outputs": [],
                 "source": [
                     "df.columns = df.columns.str.lower().str.replace(' ', '_')\n"
+                    "df['eu_sales'] = pd.to_numeric(df['eu_sales'], errors='coerce')\n"
+                    "df['jp_sales'] = pd.to_numeric(df['jp_sales'], errors='coerce')\n"
                     "df['user_score'] = pd.to_numeric(df['user_score'], errors='coerce')\n"
                     "df['critic_score'] = pd.to_numeric(df['critic_score'], errors='coerce')"
                 ],
@@ -67,6 +69,16 @@ def _write_games_project_notebook(path: Path) -> None:
                     "Пропуски в оценках оставляем как неизвестные значения, "
                     "часть строк с критически важными пропусками можно удалить, "
                     "а для категориальных полей использовать значение-индикатор."
+                ],
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "df['rating'] = df['rating'].fillna('unknown')\n"
+                    "df = df.dropna(subset=['name', 'genre'])"
                 ],
             },
             {
@@ -164,7 +176,7 @@ def test_games_preprocessing_criteria_map_passes_representative_notebook(client,
     findings = client.get(f"/api/v1/projects/{project_id}/findings")
     assert findings.status_code == 200
     rows = findings.json()
-    assert len(rows) == 14
+    assert len(rows) == 15
     assert {row["status"] for row in rows} == {"pass"}
 
     codes = {row["criterion_code"] for row in rows}

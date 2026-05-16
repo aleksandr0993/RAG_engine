@@ -228,6 +228,30 @@ python scripts/import_project_brief.py \
 
 Если файл уже существует, importer завершится ошибкой; для пересоздания добавьте `--overwrite`.
 
+Если есть авторское решение / ноутбук старшего ревьюера с цветными блоками `Критерии проверки` и `Комментарий автора`, импортируйте его отдельно:
+
+```bash
+python scripts/import_senior_review_notebook.py \
+  /path/to/game_po_milestones.ipynb \
+  --project games_preprocessing
+```
+
+Результаты:
+
+- `./data/senior_review_guidance/games_preprocessing.json` — структурированная рубрика и цветовая политика
+- `./data/senior_review_guidance/games_preprocessing.md` — удобный Markdown-конспект для ревью человеком
+- `./data/project_training/games_preprocessing_senior_review.jsonl` — runtime-примеры для project-training retrieval
+
+Чтобы эти формулировки использовались при генерации комментариев:
+
+```env
+ENABLE_RETRIEVAL=true
+ENABLE_PROJECT_REVIEW_TRAINING=true
+PROJECT_REVIEW_TRAINING_PATH=./data/project_training/games_preprocessing_senior_review.jsonl
+```
+
+При загрузке работы можно передать `review_training_project=games_preprocessing`, чтобы retrieval фильтровался по этому проекту.
+
 Для проекта спринта 7 «Предобработка данных» добавлен отдельный критерий-карта:
 
 ```bash
