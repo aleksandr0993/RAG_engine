@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     project_review_training_path: str | None = None
     # When set, project-training JSONL rows must match this source_project unless the row’s source_project is empty (wildcard).
     project_review_training_filter_project: str | None = None
+    # Optional JSONL memory learned from source -> human-reviewed notebook pairs; affects insertion position only.
+    enable_reviewer_insertion_memory: bool = False
+    reviewer_insertions_path: str | None = "./data/reviewer_insertions/games_preprocessing.jsonl"
+    reviewer_insertion_min_score: float = 0.45
 
     # Student Q&A assistant (RAG over project artifacts + optional course KB on disk)
     student_assistant_enabled: bool = True

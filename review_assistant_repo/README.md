@@ -286,6 +286,28 @@ python scripts/export_live_reviewer_artifacts.py \
 
 Перед боевой проверкой реального студента сначала смотрите `*_reviewed_by_assistant.ipynb`: это самый близкий к платформенному сценарию вид результата. Markdown удобен как короткое итоговое ревью, JSON нужен для аудита причин срабатывания критериев.
 
+### Память мест вставки комментариев ревьюера
+
+Чтобы учиться не только формулировкам, но и местам вставки комментариев, соберите JSONL из пары `исходник студента → проверенный ревьюером ноутбук`:
+
+```bash
+python scripts/extract_reviewer_insertions.py \
+  ./data/student_samples/comparison_18680554/student_homework_1746533884.ipynb \
+  ./data/student_samples/comparison_18680554/human_review_1746614288.ipynb \
+  --project games_preprocessing \
+  --output ./data/reviewer_insertions/games_preprocessing.jsonl
+```
+
+JSONL хранит устойчивые якоря: цвет комментария, предполагаемый критерий, ближайший раздел, признаки соседней студенческой ячейки (`fillna`, `rating`, `groupby`, `platform` и т.п.) и локальный контекст. В автопроверке эта память влияет только на место вставки комментария, а не на статус критерия.
+
+Включение:
+
+```env
+ENABLE_REVIEWER_INSERTION_MEMORY=true
+REVIEWER_INSERTIONS_PATH=./data/reviewer_insertions/games_preprocessing.jsonl
+REVIEWER_INSERTION_MIN_SCORE=0.45
+```
+
 ### Справочник типичных комментариев ревьюера (много `.ipynb`)
 
 Офлайн-инструмент: кластеризация по **секции** (`section_name`) и **цвету** алерта в HTML (`alert-danger` / `alert-warning` / `alert-success`). Результат — JSON и опционально Markdown; **не** считается рубрикой и не задаёт эталонных оценок.

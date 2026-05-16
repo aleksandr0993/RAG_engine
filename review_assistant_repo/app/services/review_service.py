@@ -20,6 +20,7 @@ from app.parsers.notebook import NotebookParser
 from app.parsers.pdf import PDFParser
 from app.parsers.sql import SQLParser
 from app.retrieval.local_examples import get_retrieval_backend
+from app.retrieval.reviewer_insertions import choose_insertion_anchor, load_insertion_rows
 from app.services.capture_summary import build_capture_summary
 from app.services.comment_dedup import dedupe_notebook_insertions
 from app.services.criteria_summary import build_criteria_execution_summary_from_merged
@@ -399,6 +400,12 @@ class ReviewService:
         seen_criteria = set()
 
         training_slug = ((project.metadata_json or {}).get("review_training_project") or "").strip() or None
+        settings_for_memory = get_settings()
+        reviewer_insertion_rows = (
+            load_insertion_rows(settings_for_memory.reviewer_insertions_path)
+            if settings_for_memory.enable_reviewer_insertion_memory and project.source_type == "ipynb"
+            else []
+        )
 
         merged_results = []
         t_crit = time.perf_counter()
@@ -505,12 +512,29 @@ class ReviewService:
 
                 if project.source_type == "ipynb":
                     anchor_position_idx = result["anchor_position_idx"]
+                    comment_level = "danger" if severity == "required" and final_status in ("fail", "unknown") else "warning"
+                    if reviewer_insertion_rows and (anchor_position_idx is None or not result.get("evidence")):
+                        learned_anchor = choose_insertion_anchor(
+                            artifact_dicts,
+                            reviewer_insertion_rows,
+                            project_type=training_slug,
+                            criterion_code=criterion_code,
+                            alert_color=comment_level,
+                            query_text=fail_text,
+                            min_score=settings_for_memory.reviewer_insertion_min_score,
+                        )
+                        if learned_anchor is not None:
+                            anchor_position_idx = learned_anchor.position_idx
+                            result_meta["reviewer_insertion_memory"] = {
+                                "score": learned_anchor.score,
+                                "example_id": learned_anchor.example.get("example_id"),
+                                "source_notebook": learned_anchor.example.get("source_notebook"),
+                            }
                     if anchor_position_idx is None:
                         anchor_position_idx = max(
                             (int(a["position_idx"] or 0) for a in artifact_dicts),
                             default=0,
                         )
-                    comment_level = "danger" if severity == "required" and final_status in ("fail", "unknown") else "warning"
                     comment_html = build_notebook_comment_html(
                         title="Корректировка решения:",
                         body=fail_text,

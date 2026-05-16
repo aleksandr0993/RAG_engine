@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import nbformat
+from fastapi.testclient import TestClient
+
 
 def _write_games_project_notebook(path: Path) -> None:
     notebook = {
@@ -282,3 +285,67 @@ def test_games_preprocessing_accepts_reviewer_pair_patterns(client, tmp_path):
     by_code = {row["criterion_code"]: row["status"] for row in rows}
     assert by_code["games_columns_snake_case"] == "pass"
     assert by_code["games_missing_values_quantified"] == "pass"
+
+
+def test_reviewer_insertion_memory_places_failed_comment_near_matching_cell(tmp_path, monkeypatch):
+    notebook_path = tmp_path / "games_memory_anchor.ipynb"
+    _write_games_project_notebook(notebook_path)
+    data = json.loads(notebook_path.read_text(encoding="utf-8"))
+    data["cells"][11]["source"] = [
+        "grouped_data = df_actual.groupby('platform')['name'].count()\n",
+        "display(grouped_data.sort_values(ascending=False))",
+    ]
+    notebook_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    memory_path = tmp_path / "reviewer_insertions.jsonl"
+    memory_row = {
+        "example_id": "top7_example",
+        "project_type": "games_preprocessing",
+        "alert_color": "danger",
+        "criterion_code": "games_top7_platforms",
+        "comment_text": "Выведи топ-7 платформ по количеству игр.",
+        "anchor_before": {"cell_type": "code", "features": ["groupby", "platform"]},
+        "local_context": {
+            "before_text": "grouped_data = df_actual.groupby('platform')['name'].count()",
+        },
+    }
+    memory_path.write_text(json.dumps(memory_row, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'test.db'}")
+    monkeypatch.setenv("FILES_ROOT", str(data_dir / "files"))
+    monkeypatch.setenv("EXPORTS_ROOT", str(data_dir / "exports"))
+    monkeypatch.setenv("ENABLE_NOTEBOOK_EXECUTION", "false")
+    monkeypatch.setenv("ENABLE_REVIEWER_INSERTION_MEMORY", "true")
+    monkeypatch.setenv("REVIEWER_INSERTIONS_PATH", str(memory_path))
+    monkeypatch.setenv("REVIEWER_INSERTION_MIN_SCORE", "0.45")
+
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    from app.main import create_app
+
+    with TestClient(create_app()) as client:
+        with notebook_path.open("rb") as f:
+            upload = client.post(
+                "/api/v1/projects/upload",
+                data={
+                    "criteria_map_code": "notebook_games_preprocessing_v1",
+                    "review_training_project": "games_preprocessing",
+                },
+                files={"file": (notebook_path.name, f, "application/x-ipynb+json")},
+            )
+        assert upload.status_code == 200, upload.text
+        project_id = upload.json()["project_id"]
+
+        review = client.post(f"/api/v1/projects/{project_id}/review")
+        assert review.status_code == 200, review.text
+        assert review.json()["final_verdict"] == "revise"
+
+        reviewed_resp = client.get(f"/api/v1/projects/{project_id}/export/reviewed_notebook")
+        assert reviewed_resp.status_code == 200
+
+    reviewed = nbformat.reads(reviewed_resp.content.decode("utf-8"), as_version=4)
+    sources = [cell.source for cell in reviewed.cells]
+    target_idx = next(i for i, source in enumerate(sources) if "grouped_data = df_actual.groupby('platform')" in source)
+    assert "Топ-7 платформ" in sources[target_idx + 1] or "топ-7 платформ" in sources[target_idx + 1]

@@ -4,6 +4,12 @@ from app.retrieval.comment_catalog import build_catalog, catalog_to_markdown, wr
 from app.retrieval.interface import RetrievalBackend, ReviewExample
 from app.retrieval.local_examples import LocalFileRetrievalBackend, get_retrieval_backend
 from app.retrieval.notebook_training import extract_rows_from_ipynb, merge_write_jsonl
+from app.retrieval.reviewer_insertions import (
+    choose_insertion_anchor,
+    extract_reviewer_insertions,
+    load_insertion_rows,
+    write_insertion_rows,
+)
 
 __all__ = [
     "ReviewExample",
@@ -15,4 +21,8 @@ __all__ = [
     "build_catalog",
     "catalog_to_markdown",
     "write_catalog_json",
+    "choose_insertion_anchor",
+    "extract_reviewer_insertions",
+    "load_insertion_rows",
+    "write_insertion_rows",
 ]
