@@ -211,6 +211,23 @@ python scripts/wiki_html_to_course_kb.py \
   --metadata-json ./data/course_kb/wiki-python-basics.meta.json
 ```
 
+Для быстрого старта нового типа проекта используйте semi-automatic importer. Он создаёт course KB, metadata и **черновик** criteria map, который нужно отревьюить перед использованием в потоке ревью:
+
+```bash
+python scripts/import_project_brief.py \
+  /path/to/wiki-python-basics.html \
+  --slug games_preprocessing \
+  --kind ipynb
+```
+
+Результаты:
+
+- `./data/course_kb/games_preprocessing.md`
+- `./data/course_kb/games_preprocessing.meta.json`
+- `./configs/criteria_maps/ipynb_games_preprocessing_v1.json`
+
+Если файл уже существует, importer завершится ошибкой; для пересоздания добавьте `--overwrite`.
+
 Для проекта спринта 7 «Предобработка данных» добавлен отдельный критерий-карта:
 
 ```bash
