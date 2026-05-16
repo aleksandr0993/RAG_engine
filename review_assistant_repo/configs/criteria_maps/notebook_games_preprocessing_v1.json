@@ -114,8 +114,8 @@
       "category": "data_quality",
       "applies_to": "ipynb",
       "severity": "required",
-      "title": "Оценки пользователей и критиков приведены к числовому типу",
-      "description": "Строковые значения вроде unknown нужно преобразовать в пропуски, а оценки — в числовой тип.",
+      "title": "Проблемные числовые столбцы приведены к числовому типу",
+      "description": "Строковые значения вроде unknown/tbd нужно преобразовать в пропуски через pd.to_numeric(errors='coerce').",
       "detection_mode": "rule",
       "rule": {
         "artifact_types": [
@@ -125,13 +125,14 @@
           "pd.to_numeric",
           "errors",
           "coerce",
-          "user_score",
-          "critic_score"
+          "eu_sales",
+          "jp_sales",
+          "user_score"
         ]
       },
       "comment_templates": {
-        "pass": "Преобразование оценок к числовому типу найдено.",
-        "fail": "Приведи user_score и critic_score к числовому типу через pd.to_numeric(..., errors='coerce'), чтобы строковые значения стали пропусками."
+        "pass": "Преобразование проблемных числовых столбцов найдено.",
+        "fail": "Изучи причины некорректных типов и приведи eu_sales, jp_sales и user_score к числовому типу через pd.to_numeric(..., errors='coerce')."
       }
     },
     {
@@ -182,6 +183,28 @@
       "comment_templates": {
         "pass": "Решение по пропускам найдено.",
         "fail": "Опиши и реализуй решение по пропускам: что оставляешь, что удаляешь или чем заменяешь, и почему это допустимо."
+      }
+    },
+    {
+      "code": "games_genre_normalized",
+      "category": "data_quality",
+      "applies_to": "ipynb",
+      "severity": "required",
+      "title": "Жанры нормализованы для устранения неявных дубликатов",
+      "description": "В genre нужно обработать неявные дубликаты, связанные с разным регистром.",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": [
+          "code_cell"
+        ],
+        "patterns_all": [
+          "genre",
+          ".str.lower"
+        ]
+      },
+      "comment_templates": {
+        "pass": "Нормализация жанров найдена.",
+        "fail": "Проверь неявные дубликаты в genre и нормализуй значения, например через .str.lower()."
       }
     },
     {
