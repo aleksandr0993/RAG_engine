@@ -1,0 +1,321 @@
+{
+  "criteria": [
+    {
+      "code": "games_project_intro",
+      "category": "structure",
+      "applies_to": "ipynb",
+      "severity": "required",
+      "title": "Есть введение к проекту про игровую индустрию",
+      "description": "Во введении должна быть обозначена цель исследования и контекст данных по играм.",
+      "detection_mode": "hybrid",
+      "hybrid_check": {
+        "task": "has_meaningful_intro"
+      },
+      "comment_templates": {
+        "pass": "Введение найдено.",
+        "fail": "Добавь введение: цель проекта, период исследования и краткое описание данных по играм."
+      }
+    },
+    {
+      "code": "games_dataset_loaded",
+      "category": "data_loading",
+      "applies_to": "ipynb",
+      "severity": "required",
+      "title": "Загружен датасет new_games.csv",
+      "description": "Проект должен работать с датасетом /datasets/new_games.csv.",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": [
+          "code_cell"
+        ],
+        "patterns_all": [
+          "read_csv",
+          "new_games.csv"
+        ]
+      },
+      "comment_templates": {
+        "pass": "Датасет new_games.csv загружен.",
+        "fail": "Загрузи исходный датасет через read_csv('/datasets/new_games.csv') или явно укажи путь к new_games.csv."
+      }
+    },
+    {
+      "code": "games_initial_overview",
+      "category": "data_loading",
+      "applies_to": "ipynb",
+      "severity": "required",
+      "title": "Есть первичное знакомство с данными",
+      "description": "Нужно вывести первые строки и info() по датафрейму.",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": [
+          "code_cell"
+        ],
+        "patterns_all": [
+          ".head(",
+          ".info("
+        ]
+      },
+      "comment_templates": {
+        "pass": "Первичный обзор данных найден.",
+        "fail": "Добавь первичное знакомство с данными: выведи первые строки через head() и структуру через info()."
+      }
+    },
+    {
+      "code": "games_overview_commentary",
+      "category": "analysis",
+      "applies_to": "ipynb",
+      "severity": "warning",
+      "title": "Есть текстовый вывод после знакомства с данными",
+      "description": "После первичного обзора нужен вывод об объёме данных, пропусках, типах и особенностях столбцов.",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": [
+          "markdown_cell"
+        ],
+        "patterns_any": [
+          "объём",
+          "объем",
+          "пропуск",
+          "тип",
+          "столб"
+        ],
+        "min_normalized_length": 80
+      },
+      "comment_templates": {
+        "pass": "Текстовый вывод после знакомства с данными найден.",
+        "fail": "После head()/info() добавь вывод: какой объём данных, где есть пропуски, какие типы требуют обработки и что заметно по столбцам."
+      }
+    },
+    {
+      "code": "games_columns_snake_case",
+      "category": "data_quality",
+      "applies_to": "ipynb",
+      "severity": "required",
+      "title": "Названия столбцов приведены к snake_case",
+      "description": "Названия столбцов должны быть в нижнем регистре, пробелы заменены подчёркиваниями.",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": [
+          "code_cell"
+        ],
+        "patterns_all": [
+          ".columns",
+          ".str.lower",
+          "str.replace"
+        ]
+      },
+      "comment_templates": {
+        "pass": "Обработка названий столбцов найдена.",
+        "fail": "Проверь названия столбцов и приведи их к snake_case: нижний регистр и подчёркивания вместо пробелов."
+      }
+    },
+    {
+      "code": "games_scores_numeric_conversion",
+      "category": "data_quality",
+      "applies_to": "ipynb",
+      "severity": "required",
+      "title": "Оценки пользователей и критиков приведены к числовому типу",
+      "description": "Строковые значения вроде unknown нужно преобразовать в пропуски, а оценки — в числовой тип.",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": [
+          "code_cell"
+        ],
+        "patterns_all": [
+          "pd.to_numeric",
+          "errors",
+          "coerce",
+          "user_score",
+          "critic_score"
+        ]
+      },
+      "comment_templates": {
+        "pass": "Преобразование оценок к числовому типу найдено.",
+        "fail": "Приведи user_score и critic_score к числовому типу через pd.to_numeric(..., errors='coerce'), чтобы строковые значения стали пропусками."
+      }
+    },
+    {
+      "code": "games_missing_values_quantified",
+      "category": "data_quality",
+      "applies_to": "ipynb",
+      "severity": "required",
+      "title": "Пропуски посчитаны в абсолютных и относительных значениях",
+      "description": "Нужно показать количество пропусков по столбцам и их долю.",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": [
+          "code_cell"
+        ],
+        "patterns_all": [
+          ".isna().sum",
+          ".isna().mean"
+        ]
+      },
+      "comment_templates": {
+        "pass": "Подсчёт пропусков в абсолютных и относительных значениях найден.",
+        "fail": "Посчитай пропуски по каждому столбцу в абсолютных и относительных значениях, например через isna().sum() и isna().mean()."
+      }
+    },
+    {
+      "code": "games_missing_values_decision",
+      "category": "data_quality",
+      "applies_to": "ipynb",
+      "severity": "required",
+      "title": "Есть решение по обработке пропусков",
+      "description": "Для пропусков нужно объяснить выбранное действие: оставить, удалить или заменить.",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": [
+          "markdown_cell",
+          "code_cell"
+        ],
+        "patterns_any": [
+          "fillna",
+          "dropna",
+          "остав",
+          "замен",
+          "удал",
+          "индикатор"
+        ],
+        "min_normalized_length": 40
+      },
+      "comment_templates": {
+        "pass": "Решение по пропускам найдено.",
+        "fail": "Опиши и реализуй решение по пропускам: что оставляешь, что удаляешь или чем заменяешь, и почему это допустимо."
+      }
+    },
+    {
+      "code": "games_duplicates_checked",
+      "category": "data_quality",
+      "applies_to": "ipynb",
+      "severity": "required",
+      "title": "Проверены явные и неявные дубликаты",
+      "description": "Нужно изучить категориальные значения, нормализовать текстовые поля и проверить явные дубликаты.",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": [
+          "code_cell"
+        ],
+        "patterns_any": [
+          ".duplicated(",
+          "drop_duplicates(",
+          ".unique(",
+          ".value_counts("
+        ]
+      },
+      "comment_templates": {
+        "pass": "Проверка дубликатов найдена.",
+        "fail": "Проверь явные и неявные дубликаты: изучи уникальные значения категориальных столбцов, нормализуй текст и проверь duplicated()."
+      }
+    },
+    {
+      "code": "games_removed_rows_quantified",
+      "category": "data_quality",
+      "applies_to": "ipynb",
+      "severity": "warning",
+      "title": "Оценено количество удалённых строк",
+      "description": "Если при предобработке удалялись строки, нужно показать абсолютное и относительное количество.",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": [
+          "markdown_cell",
+          "code_cell"
+        ],
+        "patterns_all": [
+          "удал",
+          "%"
+        ]
+      },
+      "comment_templates": {
+        "pass": "Оценка удалённых строк найдена.",
+        "fail": "Если удаляешь строки, посчитай и прокомментируй их количество в абсолютных значениях и в процентах от исходного объёма."
+      }
+    },
+    {
+      "code": "games_actual_period_filter",
+      "category": "transformation",
+      "applies_to": "ipynb",
+      "severity": "required",
+      "title": "Сформирован срез за 2000-2013 годы",
+      "description": "Для анализа нужен период с 2000 по 2013 год включительно.",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": [
+          "code_cell"
+        ],
+        "patterns_all": [
+          "2000",
+          "2013",
+          "year"
+        ]
+      },
+      "comment_templates": {
+        "pass": "Фильтрация периода 2000-2013 найдена.",
+        "fail": "Отфильтруй данные по периоду 2000-2013 включительно и сохрани срез в отдельный датафрейм, например df_actual."
+      }
+    },
+    {
+      "code": "games_score_categories",
+      "category": "transformation",
+      "applies_to": "ipynb",
+      "severity": "required",
+      "title": "Созданы категории оценок пользователей и критиков",
+      "description": "Нужно выделить низкую, среднюю и высокую оценку по пользовательским и экспертным шкалам.",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": [
+          "code_cell",
+          "markdown_cell"
+        ],
+        "patterns_all": [
+          "высок",
+          "средн",
+          "низк"
+        ]
+      },
+      "comment_templates": {
+        "pass": "Категоризация оценок найдена.",
+        "fail": "Добавь категоризацию user_score и critic_score: высокая, средняя и низкая оценка с границами из задания."
+      }
+    },
+    {
+      "code": "games_top7_platforms",
+      "category": "analysis",
+      "applies_to": "ipynb",
+      "severity": "required",
+      "title": "Выделены топ-7 платформ по количеству игр",
+      "description": "Нужно найти семь платформ с наибольшим количеством игр за выбранный период.",
+      "detection_mode": "rule",
+      "rule": {
+        "artifact_types": [
+          "code_cell"
+        ],
+        "patterns_all": [
+          "platform",
+          "value_counts",
+          "head(7"
+        ]
+      },
+      "comment_templates": {
+        "pass": "Топ-7 платформ найден.",
+        "fail": "Выдели топ-7 платформ по количеству игр за 2000-2013 годы, например через value_counts().head(7)."
+      }
+    },
+    {
+      "code": "games_final_conclusion",
+      "category": "analysis",
+      "applies_to": "ipynb",
+      "severity": "warning",
+      "title": "Есть финальный вывод",
+      "description": "В конце проекта нужен текстовый вывод по результатам предобработки и полученному срезу данных.",
+      "detection_mode": "hybrid",
+      "hybrid_check": {
+        "task": "has_markdown_conclusion"
+      },
+      "comment_templates": {
+        "pass": "Финальный вывод найден.",
+        "fail": "Добавь финальный вывод: какие данные получены после предобработки, какой период анализируется и какие платформы вошли в топ."
+      }
+    }
+  ]
+}
