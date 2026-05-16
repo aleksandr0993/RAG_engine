@@ -262,6 +262,30 @@ curl -X POST http://127.0.0.1:8000/api/v1/projects/upload \
 
 Карта проверяет проектные сигналы по датасету `new_games.csv`: первичное знакомство, `snake_case`, типы оценок, пропуски, дубликаты, фильтр 2000–2013, категории оценок, top-7 платформ и выводы.
 
+### Экспорт «живого» ревью для студенческого ноутбука
+
+Для ручной проверки результата используйте скрипт экспорта. Он запускает Review Assistant в изолированной временной базе и сохраняет три артефакта:
+
+- `*_live_reviewer_review.md` — текст ревью в формате, близком к сообщению живого ревьюера
+- `*_reviewed_by_assistant.ipynb` — ноутбук с вставленными комментариями ревьюера
+- `*_review_result.json` — технический JSON с критериями, статусами и evidence
+
+```bash
+python scripts/export_live_reviewer_artifacts.py \
+  /path/to/student_project.ipynb \
+  --criteria-map-code notebook_games_preprocessing_v1 \
+  --review-training-project games_preprocessing \
+  --output-dir ./data/student_samples
+```
+
+Для присланного пилотного ноутбука ориентиры такие:
+
+- `./data/student_samples/pilot_live_reviewer_review.md`
+- `./data/student_samples/homework_1778527421_reviewed_by_assistant.ipynb`
+- `./data/student_samples/pilot_review_result_after_cleanup.json`
+
+Перед боевой проверкой реального студента сначала смотрите `*_reviewed_by_assistant.ipynb`: это самый близкий к платформенному сценарию вид результата. Markdown удобен как короткое итоговое ревью, JSON нужен для аудита причин срабатывания критериев.
+
 ### Справочник типичных комментариев ревьюера (много `.ipynb`)
 
 Офлайн-инструмент: кластеризация по **секции** (`section_name`) и **цвету** алерта в HTML (`alert-danger` / `alert-warning` / `alert-success`). Результат — JSON и опционально Markdown; **не** считается рубрикой и не задаёт эталонных оценок.
