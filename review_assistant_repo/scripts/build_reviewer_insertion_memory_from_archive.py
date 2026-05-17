@@ -50,6 +50,7 @@ def main() -> None:
     )
     print(f"notebooks_found={summary['notebooks_found']}")
     print(f"processed={summary['processed']}")
+    print(f"ignored_empty_projects={summary.get('ignored_empty_projects', 0)}")
     print(f"insertions_extracted={summary['insertions_extracted']}")
     print(f"manual_review_required={summary['manual_review_required']}")
     print(f"output={args.output}")

@@ -69,6 +69,30 @@ def test_extract_reviewer_insertions_ignores_existing_source_comments(tmp_path: 
     assert rows[0]["review_iteration"] == 2
 
 
+def test_extract_reviewer_insertions_skips_opening_comment(tmp_path: Path):
+    source = tmp_path / "source.ipynb"
+    reviewed = tmp_path / "reviewed.ipynb"
+    opening = (
+        '<div class="alert alert-success"><h2>Комментарий ревьюера ✔️</h2>'
+        "Привет! Меня зовут Анна, я буду твоим ревьюером. "
+        "Предлагаю общаться на ты. Пожалуйста, не удаляй комментарии ревьюера."
+        "</div>"
+    )
+    review = (
+        '<div class="alert alert-danger"><h2>Комментарий ревьюера ❌</h2>'
+        "Замени пропуски в rating на non_rating."
+        "</div>"
+    )
+    _write_nb(source, [new_markdown_cell("## Пропуски"), new_code_cell("df['rating'].fillna('unknown')")])
+    _write_nb(reviewed, [new_markdown_cell(opening), new_markdown_cell("## Пропуски"), new_code_cell("df['rating'].fillna('unknown')"), new_markdown_cell(review)])
+
+    rows = extract_reviewer_insertions(source, reviewed, project_type="games_preprocessing")
+
+    assert len(rows) == 1
+    assert rows[0]["alert_color"] == "danger"
+    assert "Меня зовут" not in rows[0]["comment_text"]
+
+
 def test_write_and_load_insertion_rows_dedupes_by_example_id(tmp_path: Path):
     path = tmp_path / "memory.jsonl"
     row = {"example_id": "same", "project_type": "games_preprocessing"}

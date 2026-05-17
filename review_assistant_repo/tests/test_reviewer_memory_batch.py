@@ -113,6 +113,37 @@ def test_build_reviewer_insertion_memory_flags_ambiguous_file(tmp_path: Path):
     assert "no_insertions_extracted" in summary["problem_files"][0]["reasons"]
 
 
+def test_build_reviewer_insertion_memory_ignores_empty_project_review(tmp_path: Path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    _write_nb(
+        input_dir / "empty_project.ipynb",
+        [
+            new_markdown_cell(
+                '<div class="alert alert-info"><h2>Комментарий ревьюера</h2>'
+                "Получил пустой проект, похоже произошел технический сбой."
+                "</div>"
+            )
+        ],
+    )
+
+    summary = build_reviewer_insertion_memory_from_archive(
+        input_path=input_dir,
+        project="games_preprocessing",
+        work_dir=tmp_path / "work",
+        output=tmp_path / "memory.jsonl",
+        report_md=tmp_path / "work" / "report.md",
+        report_json=tmp_path / "work" / "report.json",
+        overwrite=True,
+    )
+
+    assert summary["ignored_empty_projects"] == 1
+    assert summary["insertions_extracted"] == 0
+    assert summary["manual_review_required"] == 0
+    assert load_insertion_rows(tmp_path / "memory.jsonl") == []
+    assert "Ignored empty projects" in (tmp_path / "work" / "report.md").read_text(encoding="utf-8")
+
+
 def test_build_reviewer_insertion_memory_accepts_zip(tmp_path: Path):
     reviewed = tmp_path / "reviewed.ipynb"
     _write_nb(

@@ -17,6 +17,19 @@ _WS_RE = re.compile(r"\s+")
 _HEADING_RE = re.compile(r"^\s*(#{1,6})\s+(.+?)\s*$")
 _ALERT_RE = re.compile(r"alert-(success|info|danger|warning)", re.IGNORECASE)
 _TOKEN_RE = re.compile(r"[\wа-яА-ЯёЁ]+", re.UNICODE)
+_EMPTY_PROJECT_RE = re.compile(
+    r"пуст(?:ой|ого|ую|ым)\s+(?:проект|файл|тетрадк|ноутбук)|"
+    r"проект\s+пуст|файл\s+пуст|тетрадк[аи]\s+пуст|"
+    r"получил(?:а)?\s+пуст|техническ(?:ий|ого)\s+сбо",
+    re.IGNORECASE,
+)
+_OPENING_REVIEW_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:привет|здравствуй|добрый\s+день)\b", re.IGNORECASE),
+    re.compile(r"меня\s+зовут|буду\s+(?:твоим|вашим)?\s*ревьюер", re.IGNORECASE),
+    re.compile(r"предлагаю\s+общаться|общаться\s+на\s+[«\"]?ты|общаться\s+на\s+[«\"]?вы", re.IGNORECASE),
+    re.compile(r"не\s+удаляй(?:те)?\s+комментарии|сохран(?:и|ите)\s+комментарии", re.IGNORECASE),
+    re.compile(r"цветов(?:ая|ую)\s+разметк|красн|желт|зел[её]н", re.IGNORECASE),
+)
 
 FEATURE_PATTERNS: tuple[tuple[str, str], ...] = (
     ("read_csv", r"read_csv|new_games\.csv"),
@@ -114,6 +127,18 @@ def infer_criterion_code(comment_text: str, anchor_features: Iterable[str]) -> s
     return ""
 
 
+def is_empty_project_reviewer_comment(comment_text: str) -> bool:
+    return bool(_EMPTY_PROJECT_RE.search(comment_text or ""))
+
+
+def is_opening_reviewer_comment(comment_text: str) -> bool:
+    text = comment_text or ""
+    if is_empty_project_reviewer_comment(text):
+        return True
+    matched = sum(1 for pattern in _OPENING_REVIEW_PATTERNS if pattern.search(text))
+    return matched >= 2
+
+
 def _cell_source(cell: Any) -> str:
     return normalize_cell_source(cell.get("source", ""))
 
@@ -154,7 +179,8 @@ def _section_path_before(cells: list[Any], idx: int) -> list[str]:
 
 
 def _nearest_student_work_cell(cells: list[Any], idx: int) -> tuple[int | None, Any | None]:
-    for pos in range(idx, -1, -1):
+    start_idx = min(idx, len(cells) - 1)
+    for pos in range(start_idx, -1, -1):
         cell = cells[pos]
         source = _cell_source(cell)
         role = infer_notebook_comment_role(source)
@@ -220,6 +246,8 @@ def extract_reviewer_insertions(
             anchor_source = _cell_source(anchor_cell) if anchor_cell is not None else ""
             anchor_features = extract_features(anchor_source)
             comment_text = plain_text(source)
+            if is_opening_reviewer_comment(comment_text):
+                continue
             row = {
                 "example_id": f"{project_type}_{reviewed_path.stem}_{reviewed_idx}",
                 "project_type": project_type,

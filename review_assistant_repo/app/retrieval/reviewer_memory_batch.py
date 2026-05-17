@@ -16,6 +16,7 @@ from app.parsers.notebook import infer_notebook_comment_role, is_review_role_cel
 from app.retrieval.reviewer_insertions import (
     detect_alert_color,
     extract_reviewer_insertions,
+    is_empty_project_reviewer_comment,
     normalize_cell_source,
     plain_text,
     write_insertion_rows,
@@ -96,6 +97,7 @@ def restore_student_source_from_review(
     removed_cells = 0
     reviewer_comments_found = 0
     student_comments_removed = 0
+    empty_project_comment_found = False
 
     for cell in nb.cells:
         source = normalize_cell_source(cell.get("source", ""))
@@ -120,6 +122,8 @@ def restore_student_source_from_review(
             removed_by_role[remove_role] += 1
             if alert_color != "unknown":
                 removed_by_alert_color[alert_color] += 1
+            if is_empty_project_reviewer_comment(plain_text(source)):
+                empty_project_comment_found = True
             continue
         filtered_cells.append(cell)
 
@@ -141,6 +145,7 @@ def restore_student_source_from_review(
         "removed_ratio": round(removed_cells / len(nb.cells), 4) if nb.cells else 0.0,
         "reviewer_comments_found": reviewer_comments_found,
         "student_comments_removed": student_comments_removed,
+        "empty_project_comment_found": empty_project_comment_found,
         "removed_by_role": dict(removed_by_role),
         "removed_by_alert_color": dict(removed_by_alert_color),
         "remaining_reviewer_markers": remaining_markers,
@@ -175,8 +180,37 @@ def _row_quality(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _student_work_text(restored_nb: dict[str, Any] | None) -> str:
+    if restored_nb is None:
+        return ""
+    parts: list[str] = []
+    for cell in restored_nb.get("cells", []):
+        source = normalize_cell_source(cell.get("source", ""))
+        role = infer_notebook_comment_role(source)
+        if is_review_role_cell(role) or role == "student":
+            continue
+        if source:
+            parts.append(source)
+    return "\n".join(parts)
+
+
+def _is_empty_project_review(stats: dict[str, Any], restored_nb: dict[str, Any] | None, rows: list[dict[str, Any]]) -> bool:
+    if stats.get("status") != "ok":
+        return False
+    if stats.get("empty_project_comment_found"):
+        return True
+    comments = [plain_text(str(row.get("comment_text") or "")) for row in rows]
+    has_empty_marker = any(is_empty_project_reviewer_comment(comment) for comment in comments)
+    if not has_empty_marker:
+        return False
+    student_text = _student_work_text(restored_nb)
+    return len(student_text) < 500 or int(stats.get("cells_after_restore") or 0) <= 3
+
+
 def _manual_review_reasons(row: dict[str, Any]) -> list[str]:
     reasons: list[str] = []
+    if row.get("status") == "ignored_empty_project":
+        return []
     if row.get("status") != "ok":
         return [f"invalid_notebook:{row.get('error_type') or 'unknown'}"]
     if row.get("reviewer_comments_found", 0) == 0:
@@ -227,6 +261,7 @@ def build_reviewer_insertion_memory_from_archive(
     seen_hashes: set[str] = set()
     manifest: list[dict[str, Any]] = []
     all_rows: list[dict[str, Any]] = []
+    ignored_empty_projects = 0
 
     for notebook_path in notebooks:
         try:
@@ -250,6 +285,15 @@ def build_reviewer_insertion_memory_from_archive(
         rows: list[dict[str, Any]] = []
         if stats.get("status") == "ok":
             rows = extract_reviewer_insertions(restored_path, notebook_path, project_type=project)
+            if _is_empty_project_review(stats, _restored_nb, rows):
+                ignored_empty_projects += 1
+                row.update(_row_quality([]))
+                row["status"] = "ignored_empty_project"
+                row["ignored_reason"] = "empty_project_review"
+                row["manual_review_required"] = False
+                row["manual_review_reasons"] = []
+                manifest.append(row)
+                continue
             all_rows.extend(rows)
             row.update(_row_quality(rows))
         else:
@@ -262,6 +306,7 @@ def build_reviewer_insertion_memory_from_archive(
     write_insertion_rows(all_rows, output, append=not overwrite)
     _write_manifest(manifest, manifest_path)
     summary = _build_summary(project, input_path, output, manifest, all_rows)
+    summary["ignored_empty_projects"] = ignored_empty_projects
     report_json.parent.mkdir(parents=True, exist_ok=True)
     report_json.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     report_md.parent.mkdir(parents=True, exist_ok=True)
@@ -298,6 +343,7 @@ def _build_summary(
         "output": str(output),
         "notebooks_found": len(manifest),
         "processed": sum(1 for row in manifest if row.get("status") == "ok"),
+        "ignored_empty_projects": sum(1 for row in manifest if row.get("status") == "ignored_empty_project"),
         "manual_review_required": len(problem_rows),
         "insertions_extracted": len(rows),
         "alert_counts": dict(alert_counts),
@@ -330,15 +376,22 @@ def _render_report_md(summary: dict[str, Any], manifest: list[dict[str, Any]]) -
         "",
         f"- Notebooks found: {summary['notebooks_found']}",
         f"- Successfully processed: {summary['processed']}",
+        f"- Ignored empty projects: {summary.get('ignored_empty_projects', 0)}",
         f"- Manual review required: {summary['manual_review_required']}",
         f"- Reviewer comments extracted: {summary['insertions_extracted']}",
         f"- Alert counts: {json.dumps(summary['alert_counts'], ensure_ascii=False)}",
         f"- Unknown criterion: {summary['unknown_criterion']}",
         f"- Weak anchors: {summary['weak_anchors']}",
         "",
-        "## Manual review required",
-        "",
     ]
+    ignored_rows = [row for row in manifest if row.get("status") == "ignored_empty_project"]
+    if ignored_rows:
+        lines.extend(["## Ignored empty projects", ""])
+        lines.extend(["| File | Reason |", "|---|---|"])
+        for row in ignored_rows:
+            lines.append(f"| `{row.get('reviewed_path')}` | {row.get('ignored_reason', 'empty_project_review')} |")
+        lines.append("")
+    lines.extend(["## Manual review required", ""])
     problem_rows = [row for row in manifest if row.get("manual_review_required")]
     if not problem_rows:
         lines.append("No files require manual review.")
