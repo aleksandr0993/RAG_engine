@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     files_root: str = "./data/files"
     exports_root: str = "./data/exports"
     max_upload_bytes: int = 100 * 1024 * 1024
-    default_style_profile: str = "alex_review_v1"
+    default_style_profile: str = "practicum_review_requirements_v1"
     enable_browser_capture: bool = False
     browser_capture_timeout_ms: int = 15000
     capture_pool_workers: int = 2

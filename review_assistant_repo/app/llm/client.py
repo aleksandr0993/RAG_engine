@@ -218,6 +218,7 @@ class LLMClient:
             description=context.get("description", ""),
             template=context.get("template", ""),
             evidence=json.dumps(context.get("evidence", []), ensure_ascii=False)[:3000],
+            style_profile=json.dumps(context.get("style_profile", {}), ensure_ascii=False)[:5000],
             retrieval_examples=json.dumps(retrieval, ensure_ascii=False)[:4000],
         )
         result = self._chat([{"role": "user", "content": prompt}], temperature=0.35)
@@ -235,6 +236,7 @@ class LLMClient:
 
         prompt = _load_prompt_file("synthesize_review.txt").format(
             sections=json.dumps(context.get("sections", {}), ensure_ascii=False)[:12000],
+            style_profile=json.dumps(context.get("style_profile", {}), ensure_ascii=False)[:5000],
         )
         result = self._chat([{"role": "user", "content": prompt}], temperature=0.3)
         if not result.ok or not result.text:

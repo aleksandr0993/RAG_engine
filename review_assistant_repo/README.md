@@ -145,6 +145,16 @@ Set in `.env` (see `.env.example`):
 
 If LLM is off or the key is missing, reviews complete using rules + heuristics only.
 
+### Review style requirements
+
+По умолчанию используется профиль `practicum_review_requirements_v1`, собранный из методички «Требования к оформлению ревью». Он задаёт тон, цветовую разметку комментариев (`danger` / `warning` / `success` + значки), правила приветственного и итогового комментария, постепенное усиление подсказок на повторных проверках и запрет на прямую правку кода студента.
+
+Профиль лежит в `configs/style_profiles/practicum_review_requirements_v1.json`. Его можно заменить через `.env`:
+
+```bash
+DEFAULT_STYLE_PROFILE=alex_review_v1
+```
+
 ### Experimental RL engine addon
 
 This project now includes an experimental RL engine extension with pluggable integrations:

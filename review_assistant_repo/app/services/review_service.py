@@ -451,6 +451,7 @@ class ReviewService:
                             "description": criterion.get("description", ""),
                             "template": fail_text,
                             "evidence": result.get("evidence", []),
+                            "style_profile": style_profile,
                             "retrieval_examples": [
                                 {
                                     "text": e.text,
@@ -613,6 +614,7 @@ class ReviewService:
                         "extra": extra_recommendations,
                         "verdict": verdict_label,
                     },
+                    "style_profile": style_profile,
                 }
             )
             if polished:

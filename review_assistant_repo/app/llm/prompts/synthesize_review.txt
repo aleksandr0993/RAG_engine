@@ -3,6 +3,9 @@ You polish a short review summary in Russian.
 Structured bullets (JSON):
 {sections}
 
+Review style profile / requirements (JSON, authoritative for tone and formatting):
+{style_profile}
+
 Rules:
 - Keep the same factual claims; do not invent new issues.
 - Tone: supportive but clear.

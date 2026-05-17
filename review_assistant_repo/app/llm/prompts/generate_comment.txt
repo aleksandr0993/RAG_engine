@@ -5,6 +5,8 @@ Criterion description: {description}
 Current template (may be improved, do not contradict severity): {template}
 Evidence snippets (JSON): {evidence}
 
+Review style profile / requirements (JSON, authoritative for tone and formatting): {style_profile}
+
 Optional retrieval snippets (JSON array). Fields may include:
 - "source_kind": "general" | "project_training" | "reviewer_reference" — which corpus the line came from (still non-authoritative)
 - "from_reviewer_reference": legacy senior Colab export (same as source_kind reviewer_reference)
