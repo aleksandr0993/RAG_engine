@@ -30,6 +30,14 @@ _OPENING_REVIEW_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"не\s+удаляй(?:те)?\s+комментарии|сохран(?:и|ите)\s+комментарии", re.IGNORECASE),
     re.compile(r"цветов(?:ая|ую)\s+разметк|красн|желт|зел[её]н", re.IGNORECASE),
 )
+_FINAL_REVIEW_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"итогов(?:ый|ого|ому)?\s+комментар", re.IGNORECASE),
+    re.compile(r"\bитог(?:и|овый)?\b|общее\s+впечатлен", re.IGNORECASE),
+    re.compile(r"проект\s+(?:принят|не\s+принят|зач[её]т|зачтен|зачт[её]н|готов)", re.IGNORECASE),
+    re.compile(r"работа\s+(?:принята|не\s+принята|зачтена|выполнена)", re.IGNORECASE),
+    re.compile(r"возвращаю\s+проект|отправляю\s+проект|жду\s+(?:проект|работу)\s+на\s+доработ", re.IGNORECASE),
+    re.compile(r"что\s+(?:именно\s+)?понравил|мне\s+понравил", re.IGNORECASE),
+)
 
 FEATURE_PATTERNS: tuple[tuple[str, str], ...] = (
     ("read_csv", r"read_csv|new_games\.csv"),
@@ -139,6 +147,20 @@ def is_opening_reviewer_comment(comment_text: str) -> bool:
     return matched >= 2
 
 
+def is_final_reviewer_comment(comment_text: str) -> bool:
+    text = comment_text or ""
+    if not text.strip():
+        return False
+    if _FINAL_REVIEW_PATTERNS[0].search(text):
+        return True
+    matched = sum(1 for pattern in _FINAL_REVIEW_PATTERNS[1:] if pattern.search(text))
+    return matched >= 2
+
+
+def is_system_reviewer_comment(comment_text: str) -> bool:
+    return is_opening_reviewer_comment(comment_text) or is_final_reviewer_comment(comment_text)
+
+
 def _cell_source(cell: Any) -> str:
     return normalize_cell_source(cell.get("source", ""))
 
@@ -246,7 +268,7 @@ def extract_reviewer_insertions(
             anchor_source = _cell_source(anchor_cell) if anchor_cell is not None else ""
             anchor_features = extract_features(anchor_source)
             comment_text = plain_text(source)
-            if is_opening_reviewer_comment(comment_text):
+            if is_system_reviewer_comment(comment_text):
                 continue
             row = {
                 "example_id": f"{project_type}_{reviewed_path.stem}_{reviewed_idx}",

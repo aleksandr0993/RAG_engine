@@ -93,6 +93,37 @@ def test_extract_reviewer_insertions_skips_opening_comment(tmp_path: Path):
     assert "Меня зовут" not in rows[0]["comment_text"]
 
 
+def test_extract_reviewer_insertions_skips_final_comment(tmp_path: Path):
+    source = tmp_path / "source.ipynb"
+    reviewed = tmp_path / "reviewed.ipynb"
+    regular_review = (
+        '<div class="alert alert-warning"><h2>Комментарий ревьюера ⚠️</h2>'
+        "Добавь проверку результата фильтрации через min и max."
+        "</div>"
+    )
+    final_review = (
+        '<div class="alert alert-info"><h2>Итоговый комментарий ревьюера ✔️</h2>'
+        "Проект принят. Мне понравилась структура работы, замечания перечислены выше."
+        "</div>"
+    )
+    _write_nb(source, [new_markdown_cell("## Фильтрация"), new_code_cell("df_actual = df[df['year'] >= 2000]")])
+    _write_nb(
+        reviewed,
+        [
+            new_markdown_cell("## Фильтрация"),
+            new_code_cell("df_actual = df[df['year'] >= 2000]"),
+            new_markdown_cell(regular_review),
+            new_markdown_cell(final_review),
+        ],
+    )
+
+    rows = extract_reviewer_insertions(source, reviewed, project_type="games_preprocessing")
+
+    assert len(rows) == 1
+    assert rows[0]["alert_color"] == "warning"
+    assert "Итоговый комментарий" not in rows[0]["comment_text"]
+
+
 def test_write_and_load_insertion_rows_dedupes_by_example_id(tmp_path: Path):
     path = tmp_path / "memory.jsonl"
     row = {"example_id": "same", "project_type": "games_preprocessing"}
