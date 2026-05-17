@@ -135,6 +135,51 @@ def infer_criterion_code(comment_text: str, anchor_features: Iterable[str]) -> s
     return ""
 
 
+def infer_praise_code(comment_text: str, section_path: Iterable[str], anchor_features: Iterable[str]) -> str:
+    text = (comment_text or "").lower()
+    section = " ".join(str(item).lower() for item in section_path)
+    features = set(anchor_features)
+    if any(token in text or token in section for token in ["вводн", "вступлен", "описан", "цели", "задачи", "контекст"]):
+        return "praise_project_intro_context"
+    if any(token in text for token in ["импортиру", "библиотек", "pandas отдельно", "первой ячейке"]):
+        return "praise_imports_separated"
+    if "describe" in text or "первичн" in text and any(token in text for token in ["анализ", "информац"]):
+        return "praise_initial_overview_extra"
+    if any(
+        token in text
+        for token in ["дол", "процент", "количество удал", "удаленных данных", "потеряли", "хватит данных", "осталось"]
+    ):
+        return "praise_removed_rows_control"
+    if any(token in text for token in ["дубли", "дубликат"]):
+        return "praise_duplicates_handled"
+    if "фильтрац" in text or "метод фильтрации" in text or "between" in text or "query" in text:
+        return "praise_filtering_solution"
+    if "to_numeric" in text or "тип" in text and ("данн" in text or "замен" in text or "привед" in text):
+        return "praise_type_conversion"
+    if any(token in text for token in ["вывод", "структурирован", "markdown", "оформлен", "оформлению"]):
+        return "praise_conclusion_or_formatting"
+    if {"groupby", "apply", "pd_cut"} & features:
+        return "praise_advanced_method"
+    if any(token in text for token in ["молодец", "отлич", "здорово", "супер", "превосход", "верно", "правильно"]):
+        return "praise_general_good_work"
+    return ""
+
+
+def classify_reviewer_comment(
+    *,
+    alert_color: str,
+    criterion_code: str,
+    praise_code: str,
+) -> str:
+    if alert_color == "success" and praise_code and not criterion_code:
+        return "non_criterion_praise"
+    if alert_color == "success" and criterion_code:
+        return "criterion_success"
+    if alert_color in {"danger", "warning"}:
+        return "actionable_feedback"
+    return "reviewer_note"
+
+
 def is_empty_project_reviewer_comment(comment_text: str) -> bool:
     return bool(_EMPTY_PROJECT_RE.search(comment_text or ""))
 
@@ -270,6 +315,9 @@ def extract_reviewer_insertions(
             comment_text = plain_text(source)
             if is_system_reviewer_comment(comment_text):
                 continue
+            section_path = _section_path_before(reviewed_cells, reviewed_idx)
+            criterion_code = infer_criterion_code(comment_text, anchor_features)
+            praise_code = infer_praise_code(comment_text, section_path, anchor_features)
             row = {
                 "example_id": f"{project_type}_{reviewed_path.stem}_{reviewed_idx}",
                 "project_type": project_type,
@@ -278,8 +326,14 @@ def extract_reviewer_insertions(
                 "review_iteration": _review_iteration(source),
                 "alert_color": detect_alert_color(source),
                 "comment_text": comment_text,
-                "criterion_code": infer_criterion_code(comment_text, anchor_features),
-                "section_path": _section_path_before(reviewed_cells, reviewed_idx),
+                "criterion_code": criterion_code,
+                "comment_kind": classify_reviewer_comment(
+                    alert_color=detect_alert_color(source),
+                    criterion_code=criterion_code,
+                    praise_code=praise_code,
+                ),
+                "praise_code": praise_code,
+                "section_path": section_path,
                 "insert_position": "after_student_cell",
                 "anchor_before": {
                     "cell_type": anchor_cell.get("cell_type", "") if anchor_cell is not None else "",

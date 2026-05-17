@@ -155,11 +155,14 @@ def restore_student_source_from_review(
 
 def _row_quality(rows: list[dict[str, Any]]) -> dict[str, Any]:
     color_counts = Counter(str(row.get("alert_color") or "unknown") for row in rows)
-    unknown_criterion_count = sum(1 for row in rows if not row.get("criterion_code"))
+    kind_counts = Counter(str(row.get("comment_kind") or "unknown") for row in rows)
+    praise_counts = Counter(str(row.get("praise_code") or "") for row in rows if row.get("praise_code"))
+    criteria_relevant_rows = [row for row in rows if row.get("comment_kind") != "non_criterion_praise"]
+    unknown_criterion_count = sum(1 for row in criteria_relevant_rows if not row.get("criterion_code"))
     unknown_alert_count = color_counts.get("unknown", 0)
     weak_anchor_count = sum(
         1
-        for row in rows
+        for row in criteria_relevant_rows
         if not ((row.get("anchor_before") or {}).get("content_hash"))
         or not ((row.get("anchor_before") or {}).get("features"))
     )
@@ -169,12 +172,16 @@ def _row_quality(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "insertions_extracted": total,
         "alert_counts": dict(color_counts),
+        "comment_kind_counts": dict(kind_counts),
+        "praise_counts": dict(praise_counts),
         "unknown_criterion_count": unknown_criterion_count,
-        "unknown_criterion_ratio": round(unknown_criterion_count / total, 4) if total else 0.0,
+        "unknown_criterion_ratio": round(unknown_criterion_count / len(criteria_relevant_rows), 4)
+        if criteria_relevant_rows
+        else 0.0,
         "unknown_alert_count": unknown_alert_count,
         "unknown_alert_ratio": round(unknown_alert_count / total, 4) if total else 0.0,
         "weak_anchor_count": weak_anchor_count,
-        "weak_anchor_ratio": round(weak_anchor_count / total, 4) if total else 0.0,
+        "weak_anchor_ratio": round(weak_anchor_count / len(criteria_relevant_rows), 4) if criteria_relevant_rows else 0.0,
         "duplicate_comment_count": dup_count,
         "duplicate_comment_ratio": round(dup_count / total, 4) if total else 0.0,
     }
@@ -334,8 +341,13 @@ def _build_summary(
     rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     alert_counts: Counter[str] = Counter()
+    kind_counts: Counter[str] = Counter()
+    praise_counts: Counter[str] = Counter()
     for row in rows:
         alert_counts[str(row.get("alert_color") or "unknown")] += 1
+        kind_counts[str(row.get("comment_kind") or "unknown")] += 1
+        if row.get("praise_code"):
+            praise_counts[str(row.get("praise_code"))] += 1
     problem_rows = [row for row in manifest if row.get("manual_review_required")]
     return {
         "project": project,
@@ -347,10 +359,17 @@ def _build_summary(
         "manual_review_required": len(problem_rows),
         "insertions_extracted": len(rows),
         "alert_counts": dict(alert_counts),
-        "unknown_criterion": sum(1 for row in rows if not row.get("criterion_code")),
+        "comment_kind_counts": dict(kind_counts),
+        "praise_counts": dict(praise_counts),
+        "unknown_criterion": sum(
+            1
+            for row in rows
+            if row.get("comment_kind") != "non_criterion_praise" and not row.get("criterion_code")
+        ),
         "weak_anchors": sum(
             1
             for row in rows
+            if row.get("comment_kind") != "non_criterion_praise"
             if not ((row.get("anchor_before") or {}).get("content_hash"))
             or not ((row.get("anchor_before") or {}).get("features"))
         ),
@@ -380,6 +399,8 @@ def _render_report_md(summary: dict[str, Any], manifest: list[dict[str, Any]]) -
         f"- Manual review required: {summary['manual_review_required']}",
         f"- Reviewer comments extracted: {summary['insertions_extracted']}",
         f"- Alert counts: {json.dumps(summary['alert_counts'], ensure_ascii=False)}",
+        f"- Comment kind counts: {json.dumps(summary.get('comment_kind_counts', {}), ensure_ascii=False)}",
+        f"- Praise counts: {json.dumps(summary.get('praise_counts', {}), ensure_ascii=False)}",
         f"- Unknown criterion: {summary['unknown_criterion']}",
         f"- Weak anchors: {summary['weak_anchors']}",
         "",

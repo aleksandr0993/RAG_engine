@@ -8,6 +8,7 @@ from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 from app.retrieval.reviewer_insertions import (
     choose_insertion_anchor,
     extract_reviewer_insertions,
+    infer_praise_code,
     load_insertion_rows,
     write_insertion_rows,
 )
@@ -122,6 +123,45 @@ def test_extract_reviewer_insertions_skips_final_comment(tmp_path: Path):
     assert len(rows) == 1
     assert rows[0]["alert_color"] == "warning"
     assert "Итоговый комментарий" not in rows[0]["comment_text"]
+
+
+def test_extract_reviewer_insertions_marks_non_criterion_praise(tmp_path: Path):
+    source = tmp_path / "source.ipynb"
+    reviewed = tmp_path / "reviewed.ipynb"
+    praise = (
+        '<div class="alert alert-success"><h2>Комментарий ревьюера ✔️</h2>'
+        "Молодец, что импортируешь библиотеку pandas отдельно в первой ячейке. "
+        "Это правило хорошего тона для будущих коллег."
+        "</div>"
+    )
+    _write_nb(source, [new_markdown_cell("## 1. Загрузка данных"), new_code_cell("import pandas as pd")])
+    _write_nb(reviewed, [new_markdown_cell("## 1. Загрузка данных"), new_code_cell("import pandas as pd"), new_markdown_cell(praise)])
+
+    rows = extract_reviewer_insertions(source, reviewed, project_type="games_preprocessing")
+
+    assert len(rows) == 1
+    assert rows[0]["criterion_code"] == ""
+    assert rows[0]["comment_kind"] == "non_criterion_praise"
+    assert rows[0]["praise_code"] == "praise_imports_separated"
+
+
+def test_infer_praise_code_uses_section_and_text():
+    assert (
+        infer_praise_code(
+            "Отлично по описанию. Цели и задачи ясны.",
+            ["Содержимое проекта"],
+            [],
+        )
+        == "praise_project_intro_context"
+    )
+    assert (
+        infer_praise_code(
+            "Ты правильно делаешь, что проверяешь количество удаленных данных.",
+            ["2.4. Явные и неявные дубликаты"],
+            [],
+        )
+        == "praise_removed_rows_control"
+    )
 
 
 def test_write_and_load_insertion_rows_dedupes_by_example_id(tmp_path: Path):

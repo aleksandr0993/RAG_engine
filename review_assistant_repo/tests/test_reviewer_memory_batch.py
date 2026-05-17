@@ -144,6 +144,36 @@ def test_build_reviewer_insertion_memory_ignores_empty_project_review(tmp_path: 
     assert "Ignored empty projects" in (tmp_path / "work" / "report.md").read_text(encoding="utf-8")
 
 
+def test_build_reviewer_insertion_memory_does_not_treat_praise_as_unknown_criterion(tmp_path: Path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    _write_nb(
+        input_dir / "praise.ipynb",
+        [
+            new_markdown_cell("## Содержимое проекта"),
+            new_markdown_cell("Цель проекта описана, задачи перечислены."),
+            new_markdown_cell(_review_comment("success", "Отлично по описанию. Цели и задачи ясны.")),
+        ],
+    )
+
+    summary = build_reviewer_insertion_memory_from_archive(
+        input_path=input_dir,
+        project="games_preprocessing",
+        work_dir=tmp_path / "work",
+        output=tmp_path / "memory.jsonl",
+        report_md=tmp_path / "work" / "report.md",
+        report_json=tmp_path / "work" / "report.json",
+        overwrite=True,
+    )
+    rows = load_insertion_rows(tmp_path / "memory.jsonl")
+
+    assert summary["insertions_extracted"] == 1
+    assert summary["unknown_criterion"] == 0
+    assert summary["comment_kind_counts"] == {"non_criterion_praise": 1}
+    assert rows[0]["praise_code"] == "praise_project_intro_context"
+    assert rows[0]["comment_kind"] == "non_criterion_praise"
+
+
 def test_build_reviewer_insertion_memory_accepts_zip(tmp_path: Path):
     reviewed = tmp_path / "reviewed.ipynb"
     _write_nb(
