@@ -200,6 +200,22 @@ python scripts/build_review_training_corpus.py \
 
 См. `notebooks/colab_project_training_batch.ipynb` для Colab.
 
+### Reviewer insertion memory from reviewed notebooks
+
+Если есть архив или папка ноутбуков, где код студента не менялся, а в `.ipynb` добавлены только комментарии ревьюера, можно восстановить “чистый” исходник и дообучить память мест вставки комментариев:
+
+```bash
+python ../scripts/build_reviewer_insertion_memory_from_archive.py \
+  --input /path/to/reviewed_notebooks_or_archive \
+  --project games_preprocessing \
+  --work-dir ./data/reviewer_memory_build/games_preprocessing \
+  --output ./data/reviewer_insertions/games_preprocessing.jsonl \
+  --report-md ./data/reviewer_memory_build/games_preprocessing/report.md \
+  --report-json ./data/reviewer_memory_build/games_preprocessing/report.json
+```
+
+Скрипт поддерживает `.ipynb`, директории, `.zip`, `.tar`, `.tar.gz`, `.tgz`; пишет `manifest.jsonl`, `problem_files.txt`, восстановленные исходники в `restored_sources/`, а в отчётах подсвечивает неоднозначные случаи: отсутствие ревью-комментариев, нераспознанный цвет, слабые якоря и высокий процент комментариев без `criterion_code`.
+
 ### Project-specific briefs: Practicum Wiki HTML → course KB
 
 Если у вас есть сохранённая HTML-страница с описанием проекта Практикума, её можно превратить в чистый текст для `STUDENT_COURSE_KB_DIR`:
