@@ -348,6 +348,7 @@ def extract_reviewer_insertions(
                 "praise_code": praise_code,
                 "section_path": section_path,
                 "insert_position": "after_student_cell",
+                "anchor_position_idx": anchor_idx,
                 "anchor_before": {
                     "cell_type": anchor_cell.get("cell_type", "") if anchor_cell is not None else "",
                     "features": anchor_features,
