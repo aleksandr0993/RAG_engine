@@ -10,6 +10,7 @@ from app.retrieval.reviewer_insertions import (
     detect_alert_color,
     extract_reviewer_insertions,
     infer_praise_code,
+    is_final_reviewer_comment,
     load_insertion_rows,
     write_insertion_rows,
 )
@@ -124,6 +125,11 @@ def test_extract_reviewer_insertions_skips_final_comment(tmp_path: Path):
     assert len(rows) == 1
     assert rows[0]["alert_color"] == "warning"
     assert "Итоговый комментарий" not in rows[0]["comment_text"]
+
+
+def test_final_comment_detects_project_acceptance_phrase():
+    assert is_final_reviewer_comment("Теперь почти идеально, молодец! Принимаю твой проект)")
+    assert is_final_reviewer_comment("Пожалуйста) Теперь почти идеально, молодец! Принимаю твой проект)")
 
 
 def test_extract_reviewer_insertions_marks_non_criterion_praise(tmp_path: Path):

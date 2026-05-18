@@ -207,6 +207,8 @@ def is_final_reviewer_comment(comment_text: str) -> bool:
     text = comment_text or ""
     if not text.strip():
         return False
+    if re.search(r"\bпринимаю\s+(?:твой|ваш)?\s*проект\b|\bпроект\s+принимаю\b", text, re.IGNORECASE):
+        return True
     if _FINAL_REVIEW_PATTERNS[0].search(text):
         return True
     matched = sum(1 for pattern in _FINAL_REVIEW_PATTERNS[1:] if pattern.search(text))
@@ -262,7 +264,7 @@ def _nearest_student_work_cell(cells: list[Any], idx: int) -> tuple[int | None, 
         cell = cells[pos]
         source = _cell_source(cell)
         role = infer_notebook_comment_role(source)
-        if is_review_role_cell(role) or role == "student":
+        if is_review_role_cell(role) or role == "student" or is_system_reviewer_comment(plain_text(source)):
             continue
         if cell.get("cell_type") in {"code", "markdown"} and source.strip():
             return pos, cell
@@ -274,7 +276,7 @@ def _next_student_work_text(cells: list[Any], idx: int) -> str:
         cell = cells[pos]
         source = _cell_source(cell)
         role = infer_notebook_comment_role(source)
-        if is_review_role_cell(role) or role == "student":
+        if is_review_role_cell(role) or role == "student" or is_system_reviewer_comment(plain_text(source)):
             continue
         if source.strip():
             return source[:2000]

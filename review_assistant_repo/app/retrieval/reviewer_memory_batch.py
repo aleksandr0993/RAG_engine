@@ -17,10 +17,25 @@ from app.retrieval.reviewer_insertions import (
     detect_alert_color,
     extract_reviewer_insertions,
     is_empty_project_reviewer_comment,
+    is_system_reviewer_comment,
     normalize_cell_source,
     plain_text,
     write_insertion_rows,
 )
+
+
+def _classify_notebook_read_error(path: Path, exc: Exception) -> tuple[str, str]:
+    error_type = type(exc).__name__
+    message = str(exc)
+    try:
+        prefix = path.read_text(encoding="utf-8", errors="replace")[:12000].lower()
+    except OSError:
+        return error_type, message
+    if "<!doctype html" in prefix or "<html" in prefix:
+        if "data-notebook-path" in prefix:
+            return "NotebookHtmlShellError", "File is a Jupyter HTML shell, not notebook JSON with cells."
+        return "NotebookHtmlExportError", "File is HTML, not notebook JSON."
+    return error_type, message
 
 
 def discover_notebooks(input_path: Path, work_dir: Path) -> tuple[list[Path], Path | None]:
@@ -71,7 +86,13 @@ def _reviewer_marker_present(source: str) -> bool:
     role = infer_notebook_comment_role(source)
     if is_review_role_cell(role):
         return True
-    return "Комментарий ревьюера" in source or "Комментарий мидл" in source
+    text = plain_text(source)
+    lowered = text.lower()
+    return (
+        "комментарий ревьюера" in lowered
+        or "комментарий мидл" in lowered
+        or ("ревьюер" in lowered and is_system_reviewer_comment(text))
+    )
 
 
 def restore_student_source_from_review(
@@ -81,11 +102,12 @@ def restore_student_source_from_review(
     try:
         nb = nbformat.read(reviewed_path, as_version=4)
     except Exception as exc:
+        error_type, error_message = _classify_notebook_read_error(reviewed_path, exc)
         return (
             {
                 "status": "error",
-                "error_type": type(exc).__name__,
-                "error_message": str(exc),
+                "error_type": error_type,
+                "error_message": error_message,
             },
             None,
         )
@@ -342,13 +364,37 @@ def _build_summary(
 ) -> dict[str, Any]:
     alert_counts: Counter[str] = Counter()
     kind_counts: Counter[str] = Counter()
+    criterion_counts: Counter[str] = Counter()
     praise_counts: Counter[str] = Counter()
     for row in rows:
         alert_counts[str(row.get("alert_color") or "unknown")] += 1
         kind_counts[str(row.get("comment_kind") or "unknown")] += 1
+        if row.get("criterion_code"):
+            criterion_counts[str(row.get("criterion_code"))] += 1
         if row.get("praise_code"):
             praise_counts[str(row.get("praise_code"))] += 1
     problem_rows = [row for row in manifest if row.get("manual_review_required")]
+    unknown_criterion = sum(
+        1
+        for row in rows
+        if row.get("comment_kind") != "non_criterion_praise" and not row.get("criterion_code")
+    )
+    unknown_alert = sum(1 for row in rows if str(row.get("alert_color") or "unknown") == "unknown")
+    weak_anchors = sum(
+        1
+        for row in rows
+        if row.get("comment_kind") != "non_criterion_praise"
+        if not ((row.get("anchor_before") or {}).get("content_hash"))
+        or not ((row.get("anchor_before") or {}).get("features"))
+    )
+    comments = [plain_text(str(row.get("comment_text") or "")).lower() for row in rows]
+    duplicate_comments = sum(count - 1 for count in Counter(comments).values() if count > 1)
+    quality_summary = {
+        "unknown_criterion": unknown_criterion,
+        "unknown_alert": unknown_alert,
+        "weak_anchors": weak_anchors,
+        "duplicate_comments": duplicate_comments,
+    }
     return {
         "project": project,
         "input": str(input_path),
@@ -360,19 +406,11 @@ def _build_summary(
         "insertions_extracted": len(rows),
         "alert_counts": dict(alert_counts),
         "comment_kind_counts": dict(kind_counts),
+        "criterion_counts": dict(criterion_counts),
         "praise_counts": dict(praise_counts),
-        "unknown_criterion": sum(
-            1
-            for row in rows
-            if row.get("comment_kind") != "non_criterion_praise" and not row.get("criterion_code")
-        ),
-        "weak_anchors": sum(
-            1
-            for row in rows
-            if row.get("comment_kind") != "non_criterion_praise"
-            if not ((row.get("anchor_before") or {}).get("content_hash"))
-            or not ((row.get("anchor_before") or {}).get("features"))
-        ),
+        "quality_summary": quality_summary,
+        "unknown_criterion": unknown_criterion,
+        "weak_anchors": weak_anchors,
         "problem_files": [
             {
                 "file": row.get("reviewed_path"),
@@ -400,9 +438,9 @@ def _render_report_md(summary: dict[str, Any], manifest: list[dict[str, Any]]) -
         f"- Reviewer comments extracted: {summary['insertions_extracted']}",
         f"- Alert counts: {json.dumps(summary['alert_counts'], ensure_ascii=False)}",
         f"- Comment kind counts: {json.dumps(summary.get('comment_kind_counts', {}), ensure_ascii=False)}",
+        f"- Criterion counts: {json.dumps(summary.get('criterion_counts', {}), ensure_ascii=False)}",
         f"- Praise counts: {json.dumps(summary.get('praise_counts', {}), ensure_ascii=False)}",
-        f"- Unknown criterion: {summary['unknown_criterion']}",
-        f"- Weak anchors: {summary['weak_anchors']}",
+        f"- Quality summary: {json.dumps(summary.get('quality_summary', {}), ensure_ascii=False)}",
         "",
     ]
     ignored_rows = [row for row in manifest if row.get("status") == "ignored_empty_project"]
