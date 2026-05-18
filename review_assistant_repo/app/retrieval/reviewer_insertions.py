@@ -16,6 +16,9 @@ _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 _HEADING_RE = re.compile(r"^\s*(#{1,6})\s+(.+?)\s*$")
 _ALERT_RE = re.compile(r"alert-(success|info|danger|warning)", re.IGNORECASE)
+_SUCCESS_EMOJI_RE = re.compile(r"(^|\s|>)✅")
+_WARNING_EMOJI_RE = re.compile(r"(^|\s|>)⚠️?")
+_DANGER_EMOJI_RE = re.compile(r"(^|\s|>)(?:⛔|❌|🚩)")
 _TOKEN_RE = re.compile(r"[\wа-яА-ЯёЁ]+", re.UNICODE)
 _EMPTY_PROJECT_RE = re.compile(
     r"пуст(?:ой|ого|ую|ым)\s+(?:проект|файл|тетрадк|ноутбук)|"
@@ -96,7 +99,15 @@ def content_hash(text: str) -> str:
 
 def detect_alert_color(source: str) -> str:
     match = _ALERT_RE.search(source or "")
-    return match.group(1).lower() if match else "unknown"
+    if match:
+        return match.group(1).lower()
+    if _DANGER_EMOJI_RE.search(source or ""):
+        return "danger"
+    if _WARNING_EMOJI_RE.search(source or ""):
+        return "warning"
+    if _SUCCESS_EMOJI_RE.search(source or ""):
+        return "success"
+    return "unknown"
 
 
 def extract_features(text: str) -> list[str]:

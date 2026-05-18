@@ -7,6 +7,7 @@ from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
 from app.retrieval.reviewer_insertions import (
     choose_insertion_anchor,
+    detect_alert_color,
     extract_reviewer_insertions,
     infer_praise_code,
     load_insertion_rows,
@@ -143,6 +144,13 @@ def test_extract_reviewer_insertions_marks_non_criterion_praise(tmp_path: Path):
     assert rows[0]["criterion_code"] == ""
     assert rows[0]["comment_kind"] == "non_criterion_praise"
     assert rows[0]["praise_code"] == "praise_imports_separated"
+
+
+def test_detect_alert_color_supports_custom_review_emoji():
+    assert detect_alert_color("#### ✅ Python Enhancement Proposal №8") == "success"
+    assert detect_alert_color("#### ⚠️ Структура и оформление проекта") == "warning"
+    assert detect_alert_color("#### ⛔ Обязателен к исправлению") == "danger"
+    assert detect_alert_color("#### 🚩 Красный флаг") == "danger"
 
 
 def test_infer_praise_code_uses_section_and_text():

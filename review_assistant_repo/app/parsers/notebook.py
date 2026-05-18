@@ -31,6 +31,16 @@ _REVIEWER_INTRO_PAT = re.compile(
     r"сегодня я проверю твой проект|комментарии будут.+alert|пожалуйста,\s*не удаляй комментарии ревьюера",
     re.IGNORECASE | re.DOTALL,
 )
+_CUSTOM_REVIEW_BOX_PAT = re.compile(
+    r"<!--\s*[✅⚠️⛔❌🚩\s]+-->|border\s*:\s*2px\s+solid\s+black|итоги\s+ревью",
+    re.IGNORECASE,
+)
+_CUSTOM_REVIEW_LABEL_PAT = re.compile(
+    r"#{2,6}\s*(?:✅|⚠️?|⛔|❌|🚩)|"
+    r"(?:^|\s|>)\s*(?:✅|⚠️?|⛔|❌|🚩)\s+"
+    r"(?:правильно|отлич|молодец|хорош|лучше|важно|согласен|предупреждение|данные|категоризац)",
+    re.IGNORECASE | re.MULTILINE,
+)
 _PRACTICUM_INSTRUCTION_PAT = re.compile(
     r"\b(?:сделайте|отметьте|проведите|посчитайте|изучите|напишите|обработайте|разделите|выделите|проверьте|используйте|не забудьте)\b",
     re.IGNORECASE,
@@ -56,6 +66,8 @@ def infer_notebook_comment_role(source: str) -> CommentRole:
     if _REVIEWER_INTRO_PAT.search(source):
         return "reviewer"
     if _REVIEW_ALERT_PAT.search(source) and _REVIEW_ALERT_LABEL_PAT.search(source):
+        return "reviewer"
+    if _CUSTOM_REVIEW_BOX_PAT.search(source) and _CUSTOM_REVIEW_LABEL_PAT.search(source):
         return "reviewer"
     return "unknown"
 

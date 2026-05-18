@@ -26,6 +26,22 @@ def test_infer_notebook_comment_role_order():
     assert infer_notebook_comment_role("plain code x=1") == "unknown"
 
 
+def test_infer_custom_bordered_reviewer_comment_role():
+    source = """
+<!-- ✅⚠️⛔❌🚩 -->
+<div style="background-color: white; border: 2px solid black; border-radius: 20px;">
+
+#### ✅ Python Enhancement Proposal №8.
+
+---
+
+✅ Правильно, что разделяешь импорт от основного кода.
+</div>
+"""
+
+    assert infer_notebook_comment_role(source) == "reviewer"
+
+
 def test_parser_metadata_comment_role(tmp_path: Path):
     nb = new_notebook(
         cells=[
