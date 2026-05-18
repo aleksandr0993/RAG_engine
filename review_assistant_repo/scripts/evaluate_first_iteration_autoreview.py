@@ -36,6 +36,19 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--memory-candidate-min-score", type=float, default=0.35)
     parser.add_argument("--max-memory-candidates", type=int, default=30)
+    parser.add_argument("--enable-llm-judge", action="store_true", help="Use LLM to keep/drop selected memory candidates.")
+    parser.add_argument("--enable-llm-generator", action="store_true", help="Use LLM to adapt selected memory comments.")
+    parser.add_argument(
+        "--enable-llm-classifier",
+        action="store_true",
+        help="Use LLM to classify selected memory comments by kind, criterion/praise code, and alert color.",
+    )
+    parser.add_argument(
+        "--enable-llm-anchor-validator",
+        action="store_true",
+        help="Use LLM to validate that selected memory comments belong near their proposed anchors.",
+    )
+    parser.add_argument("--llm-max-candidates", type=int, default=30, help="Maximum selected memory candidates sent to LLM.")
     return parser.parse_args()
 
 
@@ -51,9 +64,15 @@ def main() -> None:
         include_memory_candidates=not args.no_memory_candidates,
         memory_candidate_min_score=args.memory_candidate_min_score,
         max_memory_candidates=args.max_memory_candidates,
+        enable_llm_judge=args.enable_llm_judge,
+        enable_llm_generator=args.enable_llm_generator,
+        enable_llm_classifier=args.enable_llm_classifier,
+        enable_llm_anchor_validator=args.enable_llm_anchor_validator,
+        llm_max_candidates=args.llm_max_candidates,
     )
     summary = payload["comparison"]["summary"]
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    print("candidate_auc=" + json.dumps(payload.get("candidate_auc", {}), ensure_ascii=False))
     print(f"report_md={payload['artifacts']['report_md']}")
     print(f"comparison_json={payload['artifacts']['comparison_json']}")
 

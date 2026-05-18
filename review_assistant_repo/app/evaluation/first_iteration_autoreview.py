@@ -11,6 +11,7 @@ import nbformat
 from app.analyzers.rules import RuleEngine
 from app.config import get_settings
 from app.exporters.notebook import NotebookCommentInserter
+from app.llm.service import LLMService, get_llm_service
 from app.parsers.notebook import NotebookParser
 from app.retrieval.reviewer_insertions import (
     detect_alert_color,
@@ -55,6 +56,23 @@ def text_similarity(left: str, right: str) -> float:
     return round(len(a & b) / len(a | b), 4)
 
 
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    text = (text or "").strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{[\s\S]*\}", text)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+
+
 def _alert_from_level(level: str) -> str:
     return "danger" if level == "danger" else "warning"
 
@@ -66,6 +84,16 @@ def _status_from_memory_kind(row: dict[str, Any]) -> str:
     if kind == "non_criterion_praise":
         return "memory_praise"
     if str(row.get("alert_color") or "") == "danger":
+        return "memory_fail"
+    return "memory_warn"
+
+
+def _status_from_llm_classification(comment_kind: str, alert_color: str) -> str:
+    if comment_kind == "criterion_success":
+        return "memory_success"
+    if comment_kind == "non_criterion_praise":
+        return "memory_praise"
+    if alert_color == "danger":
         return "memory_fail"
     return "memory_warn"
 
@@ -148,6 +176,30 @@ def _artifact_features(artifact: dict[str, Any]) -> set[str]:
     return set(extract_features(_artifact_text(artifact)))
 
 
+def _anchor_context(artifacts: list[dict[str, Any]], anchor_idx: int | None) -> dict[str, Any]:
+    if anchor_idx is None:
+        return {}
+    ordered = sorted(
+        [a for a in artifacts if a.get("position_idx") is not None],
+        key=lambda item: int(item.get("position_idx") or 0),
+    )
+    current_pos = next((i for i, item in enumerate(ordered) if int(item.get("position_idx") or -1) == int(anchor_idx)), None)
+    if current_pos is None:
+        return {}
+    return {
+        "anchor_position_idx": anchor_idx,
+        "cells": [
+            {
+                "position_idx": item.get("position_idx"),
+                "artifact_type": item.get("artifact_type"),
+                "section_name": item.get("section_name"),
+                "text": _artifact_text(item)[:1800],
+            }
+            for item in ordered[max(0, current_pos - 1) : current_pos + 2]
+        ],
+    }
+
+
 def _memory_candidate_score(artifact: dict[str, Any], row: dict[str, Any]) -> float:
     art_features = _artifact_features(artifact)
     row_features = set((row.get("anchor_before") or {}).get("features") or [])
@@ -177,15 +229,13 @@ def _best_memory_anchor(artifacts: list[dict[str, Any]], row: dict[str, Any]) ->
     return best_idx, best_score
 
 
-def generate_first_iteration_memory_candidates(
+def generate_all_first_iteration_memory_candidates(
     *,
     artifacts: list[dict[str, Any]],
     memory_rows: list[dict[str, Any]],
     project: str,
     exclude_reviewed_notebook: str | None = None,
     min_score: float = 0.35,
-    max_candidates: int = 40,
-    max_per_criterion_kind: int = 4,
 ) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for row in memory_rows:
@@ -232,6 +282,26 @@ def generate_first_iteration_memory_candidates(
             int(item.get("anchor_position_idx") or 0),
         )
     )
+    return candidates
+
+
+def generate_first_iteration_memory_candidates(
+    *,
+    artifacts: list[dict[str, Any]],
+    memory_rows: list[dict[str, Any]],
+    project: str,
+    exclude_reviewed_notebook: str | None = None,
+    min_score: float = 0.35,
+    max_candidates: int = 40,
+    max_per_criterion_kind: int = 4,
+) -> list[dict[str, Any]]:
+    candidates = generate_all_first_iteration_memory_candidates(
+        artifacts=artifacts,
+        memory_rows=memory_rows,
+        project=project,
+        exclude_reviewed_notebook=exclude_reviewed_notebook,
+        min_score=min_score,
+    )
     picked: list[dict[str, Any]] = []
     per_group: Counter[tuple[str, str]] = Counter()
     seen_text_anchor: set[tuple[str, int]] = set()
@@ -250,6 +320,283 @@ def generate_first_iteration_memory_candidates(
     return picked
 
 
+def _rank_auc(points: list[tuple[float, int]]) -> float | None:
+    positives = [score for score, label in points if label == 1]
+    negatives = [score for score, label in points if label == 0]
+    if not positives or not negatives:
+        return None
+    wins = 0.0
+    total = len(positives) * len(negatives)
+    for pos in positives:
+        for neg in negatives:
+            if pos > neg:
+                wins += 1.0
+            elif pos == neg:
+                wins += 0.5
+    return round(wins / total, 4)
+
+
+def _average_precision(points: list[tuple[float, int]]) -> float | None:
+    positives = sum(1 for _, label in points if label == 1)
+    if positives == 0:
+        return None
+    ranked = sorted(points, key=lambda item: item[0], reverse=True)
+    hits = 0
+    precision_sum = 0.0
+    for idx, (_score, label) in enumerate(ranked, start=1):
+        if label != 1:
+            continue
+        hits += 1
+        precision_sum += hits / idx
+    return round(precision_sum / positives, 4)
+
+
+def label_memory_candidates_for_auc(
+    candidates: list[dict[str, Any]],
+    gold: list[dict[str, Any]],
+    *,
+    min_match_score: float = 0.35,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    unmatched_gold = set(range(len(gold)))
+    labeled: list[dict[str, Any]] = []
+    for candidate in sorted(candidates, key=lambda item: float(item.get("confidence") or 0), reverse=True):
+        best: tuple[float, int] | None = None
+        for gi in unmatched_gold:
+            gold_row = gold[gi]
+            if gold_row.get("criterion_code") and candidate.get("criterion_code") != gold_row.get("criterion_code"):
+                continue
+            score = _match_score(candidate, gold_row)
+            if best is None or score > best[0]:
+                best = (score, gi)
+        label = 0
+        matched_gold_index: int | None = None
+        match_score = 0.0
+        if best is not None and best[0] >= min_match_score:
+            match_score, matched_gold_index = best
+            unmatched_gold.remove(matched_gold_index)
+            label = 1
+        row = dict(candidate)
+        row["auc_label"] = label
+        row["matched_gold_index"] = matched_gold_index
+        row["match_score"] = match_score
+        labeled.append(row)
+
+    points = [(float(row.get("confidence") or 0), int(row["auc_label"])) for row in labeled]
+    positives = sum(label for _, label in points)
+    summary = {
+        "candidate_total": len(labeled),
+        "positive_candidates": positives,
+        "negative_candidates": len(labeled) - positives,
+        "roc_auc": _rank_auc(points),
+        "pr_auc_average_precision": _average_precision(points),
+    }
+    return labeled, summary
+
+
+def apply_llm_judge_generator(
+    candidates: list[dict[str, Any]],
+    *,
+    artifacts: list[dict[str, Any]],
+    llm_service: LLMService | None = None,
+    enable_judge: bool = False,
+    enable_generator: bool = False,
+    enable_classifier: bool = False,
+    enable_anchor_validator: bool = False,
+    max_candidates: int = 30,
+) -> list[dict[str, Any]]:
+    if not (enable_judge or enable_generator or enable_classifier or enable_anchor_validator):
+        return candidates
+
+    llm = llm_service or get_llm_service()
+    if not llm.is_available:
+        out: list[dict[str, Any]] = []
+        for item in candidates:
+            updated = dict(item)
+            meta = dict(updated.get("metadata") or {})
+            meta["llm_skipped"] = "llm_unavailable"
+            updated["metadata"] = meta
+            out.append(updated)
+        return out
+
+    refined: list[dict[str, Any]] = []
+    for idx, item in enumerate(candidates):
+        updated = dict(item)
+        meta = dict(updated.get("metadata") or {})
+        if idx >= max_candidates:
+            refined.append(updated)
+            continue
+
+        context = {
+            "candidate": {
+                "criterion_code": updated.get("criterion_code"),
+                "praise_code": updated.get("praise_code"),
+                "comment_kind": updated.get("comment_kind"),
+                "alert_color": updated.get("alert_color"),
+                "comment_text": updated.get("comment_text"),
+                "memory_candidate_score": meta.get("memory_candidate_score") or updated.get("confidence"),
+            },
+            "anchor_context": _anchor_context(artifacts, updated.get("anchor_position_idx")),
+        }
+
+        keep = True
+        anchor_valid = True
+        if enable_classifier:
+            prompt = (
+                "Ты классифицируешь комментарий ревьюера к учебной Jupyter-тетрадке.\n"
+                "Верни только JSON: {"
+                '"comment_kind": "actionable_feedback|criterion_success|non_criterion_praise|reviewer_note", '
+                '"criterion_code": "... или пусто", '
+                '"praise_code": "... или пусто", '
+                '"alert_color": "danger|warning|success|unknown", '
+                '"confidence": 0..1, '
+                '"rationale": "..."}.\n'
+                "actionable_feedback = нужно исправить; criterion_success = похвала по критерию; "
+                "non_criterion_praise = общая похвала; reviewer_note = служебная заметка/не вставлять как проверку.\n"
+                f"Данные:\n{json.dumps(context, ensure_ascii=False)[:12000]}"
+            )
+            result = llm.chat([{"role": "user", "content": prompt}], temperature=0.1)
+            meta["llm_classifier_used"] = bool(result.ok)
+            if result.ok:
+                parsed = _extract_json_object(result.text)
+                if parsed:
+                    llm_kind = str(parsed.get("comment_kind") or "").strip()
+                    llm_alert = str(parsed.get("alert_color") or "").strip()
+                    if llm_kind in {"actionable_feedback", "criterion_success", "non_criterion_praise", "reviewer_note"}:
+                        updated["comment_kind"] = llm_kind
+                        meta["llm_comment_kind"] = llm_kind
+                    if llm_alert in {"danger", "warning", "success", "unknown"}:
+                        updated["alert_color"] = llm_alert
+                        meta["llm_alert_color"] = llm_alert
+                    criterion_code = str(parsed.get("criterion_code") or "").strip()
+                    praise_code = str(parsed.get("praise_code") or "").strip()
+                    if criterion_code:
+                        updated["criterion_code"] = criterion_code
+                    if praise_code:
+                        updated["praise_code"] = praise_code
+                    if llm_kind == "reviewer_note":
+                        keep = False
+                    if llm_kind in {"actionable_feedback", "criterion_success", "non_criterion_praise"}:
+                        updated["status"] = _status_from_llm_classification(
+                            llm_kind,
+                            str(updated.get("alert_color") or "warning"),
+                        )
+                    meta["llm_classifier_confidence"] = parsed.get("confidence")
+                    meta["llm_classifier_rationale"] = str(parsed.get("rationale") or "")[:500]
+                else:
+                    meta["llm_classifier_error"] = "unparseable_response"
+            else:
+                meta["llm_classifier_error"] = result.error or "llm_call_failed"
+
+        if enable_judge:
+            prompt = (
+                "Ты оцениваешь, стоит ли вставлять комментарий ревьюера в учебную Jupyter-тетрадку.\n"
+                "Верни только JSON: {\"keep\": true|false, \"confidence\": 0..1, \"rationale\": \"...\"}.\n"
+                "Оставляй комментарий только если он конкретно относится к anchor_context и не является лишним дублем.\n"
+                f"Данные:\n{json.dumps(context, ensure_ascii=False)[:12000]}"
+            )
+            result = llm.chat([{"role": "user", "content": prompt}], temperature=0.1)
+            meta["llm_judge_used"] = bool(result.ok)
+            if result.ok:
+                parsed = _extract_json_object(result.text)
+                if parsed:
+                    keep = bool(parsed.get("keep", True))
+                    meta["llm_judge_keep"] = keep
+                    meta["llm_judge_confidence"] = parsed.get("confidence")
+                    meta["llm_judge_rationale"] = str(parsed.get("rationale") or "")[:500]
+                else:
+                    meta["llm_judge_error"] = "unparseable_response"
+            else:
+                meta["llm_judge_error"] = result.error or "llm_call_failed"
+
+        if not keep:
+            meta["source_stage"] = "llm"
+            updated["metadata"] = meta
+            refined.append(updated)
+            continue
+
+        if enable_anchor_validator:
+            validator_context = {
+                **context,
+                "candidate": {
+                    **context["candidate"],
+                    "criterion_code": updated.get("criterion_code"),
+                    "praise_code": updated.get("praise_code"),
+                    "comment_kind": updated.get("comment_kind"),
+                    "alert_color": updated.get("alert_color"),
+                    "comment_text": updated.get("comment_text"),
+                },
+            }
+            prompt = (
+                "Ты проверяешь место вставки комментария ревьюера в Jupyter-тетрадке.\n"
+                "Верни только JSON: {"
+                '"valid": true|false, '
+                '"confidence": 0..1, '
+                '"rationale": "...", '
+                '"better_anchor_hint": "... или пусто"}.\n'
+                "valid=true только если anchor_context действительно расположен рядом с проблемой, решением или похвалой, "
+                "к которой относится комментарий. Если связь слабая, ставь valid=false.\n"
+                f"Данные:\n{json.dumps(validator_context, ensure_ascii=False)[:12000]}"
+            )
+            result = llm.chat([{"role": "user", "content": prompt}], temperature=0.1)
+            meta["llm_anchor_validator_used"] = bool(result.ok)
+            if result.ok:
+                parsed = _extract_json_object(result.text)
+                if parsed:
+                    anchor_valid = bool(parsed.get("valid", True))
+                    meta["llm_anchor_valid"] = anchor_valid
+                    meta["llm_anchor_confidence"] = parsed.get("confidence")
+                    meta["llm_anchor_rationale"] = str(parsed.get("rationale") or "")[:500]
+                    hint = str(parsed.get("better_anchor_hint") or "").strip()
+                    if hint:
+                        meta["llm_anchor_better_hint"] = hint[:500]
+                else:
+                    meta["llm_anchor_validator_error"] = "unparseable_response"
+            else:
+                meta["llm_anchor_validator_error"] = result.error or "llm_call_failed"
+
+        if not anchor_valid:
+            meta["source_stage"] = "llm"
+            updated["metadata"] = meta
+            refined.append(updated)
+            continue
+
+        if enable_generator:
+            prompt = (
+                "Ты адаптируешь комментарий ревьюера под текущую тетрадку, сохраняя стиль автора.\n"
+                "Верни только JSON: {\"comment_text\": \"...\", \"rationale\": \"...\"}.\n"
+                "Не добавляй приветствие или итоговый комментарий. Не упоминай, что ты LLM.\n"
+                f"Данные:\n{json.dumps(context, ensure_ascii=False)[:12000]}"
+            )
+            result = llm.chat([{"role": "user", "content": prompt}], temperature=0.25)
+            meta["llm_generator_used"] = bool(result.ok)
+            if result.ok:
+                parsed = _extract_json_object(result.text)
+                generated = str((parsed or {}).get("comment_text") or "").strip()
+                if generated:
+                    updated["comment_text"] = generated
+                    updated["comment_html"] = build_notebook_comment_html(
+                        "Комментарий:",
+                        generated,
+                        level=str(updated.get("alert_color") or "warning"),
+                    )
+                    meta["llm_generator_rationale"] = str((parsed or {}).get("rationale") or "")[:500]
+                else:
+                    meta["llm_generator_error"] = "empty_or_unparseable_response"
+            else:
+                meta["llm_generator_error"] = result.error or "llm_call_failed"
+
+        if (
+            meta.get("llm_judge_used")
+            or meta.get("llm_generator_used")
+            or meta.get("llm_classifier_used")
+            or meta.get("llm_anchor_validator_used")
+        ):
+            meta["source_stage"] = "llm"
+        updated["metadata"] = meta
+        refined.append(updated)
+    return refined
+
+
 def run_offline_autoreview(
     *,
     restored_notebook: Path,
@@ -260,7 +607,13 @@ def run_offline_autoreview(
     include_memory_candidates: bool = True,
     memory_candidate_min_score: float = 0.35,
     max_memory_candidates: int = 30,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    enable_llm_judge: bool = False,
+    enable_llm_generator: bool = False,
+    enable_llm_classifier: bool = False,
+    enable_llm_anchor_validator: bool = False,
+    llm_max_candidates: int = 30,
+    llm_service: LLMService | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
     criteria = load_criteria_map(criteria_map)
     artifacts, notebook_obj = _parse_artifacts(restored_notebook)
     raw_results = RuleEngine().run(artifacts, criteria)
@@ -268,6 +621,17 @@ def run_offline_autoreview(
     memory_rows = load_insertion_rows(reviewer_insertions_path) if reviewer_insertions_path else []
     if exclude_reviewed_notebook:
         memory_rows = [r for r in memory_rows if r.get("reviewed_notebook") != exclude_reviewed_notebook]
+    all_memory_candidates = (
+        generate_all_first_iteration_memory_candidates(
+            artifacts=artifacts,
+            memory_rows=memory_rows,
+            project=project,
+            exclude_reviewed_notebook=None,
+            min_score=0.0,
+        )
+        if memory_rows
+        else []
+    )
 
     predicted: list[dict[str, Any]] = []
     notebook_insertions: list[dict[str, Any]] = []
@@ -340,11 +704,24 @@ def run_offline_autoreview(
             min_score=memory_candidate_min_score,
             max_candidates=max_memory_candidates,
         )
+        memory_candidates = apply_llm_judge_generator(
+            memory_candidates,
+            artifacts=artifacts,
+            llm_service=llm_service,
+            enable_judge=enable_llm_judge,
+            enable_generator=enable_llm_generator,
+            enable_classifier=enable_llm_classifier,
+            enable_anchor_validator=enable_llm_anchor_validator,
+            max_candidates=llm_max_candidates,
+        )
         existing = {
             (str(item.get("criterion_code") or ""), int(item.get("anchor_position_idx") or 0), str(item.get("comment_text") or ""))
             for item in predicted
         }
         for item in memory_candidates:
+            meta = item.get("metadata") or {}
+            if meta.get("llm_judge_keep") is False or meta.get("llm_anchor_valid") is False:
+                continue
             key = (str(item.get("criterion_code") or ""), int(item.get("anchor_position_idx") or 0), str(item.get("comment_text") or ""))
             if key in existing:
                 continue
@@ -354,7 +731,7 @@ def run_offline_autoreview(
 
     deduped = dedupe_notebook_insertions(notebook_insertions)
     reviewed_obj = NotebookCommentInserter().insert_comments(notebook_obj, deduped)
-    return predicted, reviewed_obj
+    return predicted, reviewed_obj, all_memory_candidates
 
 
 def _match_score(pred: dict[str, Any], gold: dict[str, Any]) -> float:
@@ -445,6 +822,7 @@ def compare_predictions(predicted: list[dict[str, Any]], gold: list[dict[str, An
 
 def render_report(payload: dict[str, Any]) -> str:
     s = payload["comparison"]["summary"]
+    auc = payload.get("candidate_auc") or {}
     lines = [
         "# First-iteration autoreview evaluation",
         "",
@@ -466,6 +844,10 @@ def render_report(payload: dict[str, Any]) -> str:
         f"- Gold kinds: {json.dumps(s['gold_comment_kind_counts'], ensure_ascii=False)}",
         f"- Predicted statuses: {json.dumps(s['predicted_status_counts'], ensure_ascii=False)}",
         f"- Predicted source stages: {json.dumps(s.get('predicted_source_stage_counts', {}), ensure_ascii=False)}",
+        f"- Memory candidate ROC-AUC: {auc.get('roc_auc')}",
+        f"- Memory candidate PR-AUC/AP: {auc.get('pr_auc_average_precision')}",
+        f"- Memory candidates labeled: {auc.get('candidate_total')} "
+        f"(TP: {auc.get('positive_candidates')}, FP: {auc.get('negative_candidates')})",
         "",
         "## Missed Gold",
         "",
@@ -502,6 +884,11 @@ def evaluate_first_iteration(
     include_memory_candidates: bool = True,
     memory_candidate_min_score: float = 0.35,
     max_memory_candidates: int = 30,
+    enable_llm_judge: bool = False,
+    enable_llm_generator: bool = False,
+    enable_llm_classifier: bool = False,
+    enable_llm_anchor_validator: bool = False,
+    llm_max_candidates: int = 30,
 ) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     gold = extract_gold_first_review_comments(
@@ -509,7 +896,7 @@ def evaluate_first_iteration(
         reviewed_notebook=reviewed_notebook,
         project=project,
     )
-    predicted, reviewed_obj = run_offline_autoreview(
+    predicted, reviewed_obj, all_memory_candidates = run_offline_autoreview(
         restored_notebook=restored_notebook,
         criteria_map=criteria_map,
         project=project,
@@ -518,12 +905,19 @@ def evaluate_first_iteration(
         include_memory_candidates=include_memory_candidates,
         memory_candidate_min_score=memory_candidate_min_score,
         max_memory_candidates=max_memory_candidates,
+        enable_llm_judge=enable_llm_judge,
+        enable_llm_generator=enable_llm_generator,
+        enable_llm_classifier=enable_llm_classifier,
+        enable_llm_anchor_validator=enable_llm_anchor_validator,
+        llm_max_candidates=llm_max_candidates,
     )
     comparison = compare_predictions(predicted, gold)
+    labeled_candidates, candidate_auc_summary = label_memory_candidates_for_auc(all_memory_candidates, gold)
     predicted_reviewed = out_dir / "predicted_reviewed.ipynb"
     nbformat.write(reviewed_obj, predicted_reviewed)
     _write_jsonl(gold, out_dir / "gold_first_review_comments.jsonl")
     _write_jsonl(predicted, out_dir / "predicted_insertions.jsonl")
+    _write_jsonl(labeled_candidates, out_dir / "all_memory_candidates_labeled.jsonl")
     payload = {
         "reviewed_notebook": str(reviewed_notebook),
         "restored_notebook": str(restored_notebook),
@@ -532,11 +926,13 @@ def evaluate_first_iteration(
         "artifacts": {
             "gold_jsonl": str(out_dir / "gold_first_review_comments.jsonl"),
             "predicted_jsonl": str(out_dir / "predicted_insertions.jsonl"),
+            "all_memory_candidates_labeled_jsonl": str(out_dir / "all_memory_candidates_labeled.jsonl"),
             "predicted_reviewed_notebook": str(predicted_reviewed),
             "comparison_json": str(out_dir / "comparison.json"),
             "report_md": str(out_dir / "report.md"),
         },
         "comparison": comparison,
+        "candidate_auc": candidate_auc_summary,
     }
     (out_dir / "comparison.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "report.md").write_text(render_report(payload), encoding="utf-8")
