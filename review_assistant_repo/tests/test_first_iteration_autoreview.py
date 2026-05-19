@@ -182,6 +182,24 @@ def test_label_memory_candidates_for_auc_marks_tp_fp_and_scores_auc():
     assert [row["auc_label"] for row in labeled] == [1, 0]
     assert summary["roc_auc"] == 1.0
     assert summary["pr_auc_average_precision"] == 1.0
+    assert summary["at_threshold"]["f1"] == 1.0
+    assert summary["breakdowns"]["by_criterion_code"]["games_columns_snake_case"]["positive_candidates"] == 1
+
+
+def test_label_memory_candidates_for_auc_handles_edge_cases_and_thresholds():
+    candidates = [
+        {"comment_text": "Лишний комментарий", "anchor_position_idx": 1, "confidence": 0.8, "status": "memory_warn"},
+        {"comment_text": "Еще лишний", "anchor_position_idx": 2, "confidence": 0.4, "status": "memory_warn"},
+    ]
+
+    labeled, summary = label_memory_candidates_for_auc(candidates, [], decision_threshold=0.5)
+
+    assert [row["label"] for row in labeled] == [0, 0]
+    assert summary["roc_auc"] is None
+    assert summary["pr_auc_average_precision"] is None
+    assert summary["at_threshold"]["fp"] == 1
+    assert summary["at_threshold"]["tn"] == 1
+    assert summary["at_threshold"]["f1"] == 0.0
 
 
 def test_apply_llm_judge_generator_filters_and_rewrites_candidates():
@@ -236,6 +254,57 @@ def test_apply_llm_judge_generator_filters_and_rewrites_candidates():
     assert out[0]["metadata"]["llm_generator_used"] is True
     assert out[0]["metadata"]["source_stage"] == "llm"
     assert out[1]["metadata"]["llm_judge_keep"] is False
+
+
+def test_apply_llm_judge_generator_accepts_structured_judge_schema():
+    class FakeLLM:
+        is_available = True
+        messages = []
+
+        def chat(self, messages, temperature=0.2):
+            self.messages = messages
+            return LLMCallResult(
+                ok=True,
+                text=(
+                    '{"keep_score": 0.73, "keep_decision": true, '
+                    '"anchor_ok": true, "criterion_ok": false, "reason": "wrong criterion"}'
+                ),
+            )
+
+    candidates = [
+        {
+            "criterion_code": "games_initial_overview",
+            "status": "memory_warn",
+            "confidence": 0.9,
+            "anchor_position_idx": 1,
+            "alert_color": "warning",
+            "comment_text": "Комментарий",
+            "comment_html": "old",
+            "metadata": {"source_stage": "memory_retrieval"},
+        }
+    ]
+    artifacts = [{"artifact_type": "code_cell", "position_idx": 1, "normalized_text": "df.info()", "metadata_json": {}}]
+
+    fake_llm = FakeLLM()
+    out = apply_llm_judge_generator(
+        candidates,
+        artifacts=artifacts,
+        project_memory={
+            "missing_requirements": [
+                {"criterion_code": "games_initial_overview", "reason": "intro is absent", "evidence_cell_indices": [1]}
+            ]
+        },
+        llm_service=fake_llm,
+        enable_judge=True,
+    )
+
+    assert out[0]["keep_score"] == 0.73
+    assert out[0]["metadata"]["llm_keep_score"] == 0.73
+    assert out[0]["metadata"]["llm_anchor_ok"] is True
+    assert out[0]["metadata"]["llm_criterion_ok"] is False
+    assert out[0]["metadata"]["llm_judge_keep"] is False
+    assert "project_memory" in fake_llm.messages[0]["content"]
+    assert "intro is absent" in fake_llm.messages[0]["content"]
 
 
 def test_apply_llm_classifier_and_anchor_validator_updates_and_filters_candidates():
@@ -385,3 +454,77 @@ def test_evaluate_first_iteration_cli(tmp_path: Path):
     summary = json.JSONDecoder().raw_decode(result.stdout)[0]
     assert summary["gold_total"] == 1
     assert (tmp_path / "eval_cli" / "comparison.json").exists()
+
+
+def test_build_first_iteration_candidate_dataset_cli_selects_val_threshold(tmp_path: Path):
+    repo = Path(__file__).resolve().parents[1]
+    restored = tmp_path / "restored.ipynb"
+    reviewed = tmp_path / "reviewed.ipynb"
+    _write_nb(restored, [new_code_cell("df.columns = df.columns.str.lower()\ndf.info()")])
+    _write_nb(
+        reviewed,
+        [
+            new_code_cell("df.columns = df.columns.str.lower()\ndf.info()"),
+            new_markdown_cell(_review_comment("Комментарий ревьюера", "Названия столбцов приведены к snake_case")),
+        ],
+    )
+    memory = tmp_path / "memory.jsonl"
+    memory.write_text(
+        json.dumps(
+            {
+                "example_id": "ok-columns",
+                "project_type": "python_preprocessing",
+                "review_iteration": 1,
+                "reviewed_notebook": "other.ipynb",
+                "comment_kind": "criterion_success",
+                "alert_color": "warning",
+                "criterion_code": "games_columns_snake_case",
+                "comment_text": "Комментарий ревьюера Названия столбцов приведены к snake_case",
+                "anchor_before": {"features": ["columns", "lower"]},
+                "local_context": {"before_text": "df.columns = df.columns.str.lower()"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "pairs.jsonl"
+    manifest.write_text(
+        json.dumps(
+            {
+                "id": "case-val",
+                "split": "val",
+                "reviewed": str(reviewed),
+                "restored": str(restored),
+                "project": "python_preprocessing",
+                "criteria_map": "notebook_games_preprocessing_v1",
+                "reviewer_insertions_path": str(memory),
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(repo / "scripts" / "build_first_iteration_candidate_dataset.py"),
+            "--pairs-jsonl",
+            str(manifest),
+            "--out-dir",
+            str(tmp_path / "dataset"),
+            "--memory-candidate-min-score",
+            "0.1",
+        ],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    summary = json.JSONDecoder().raw_decode(result.stdout)[0]
+    assert summary["threshold_source"] == "val"
+    assert summary["candidate_total"] >= 1
+    assert summary["by_split"]["val"]["at_threshold"]["f1"] == 1.0
+    assert (tmp_path / "dataset" / "candidates_labeled.jsonl").exists()

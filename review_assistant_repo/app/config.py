@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     llm_retry_max_wait_sec: float = 20.0
     llm_circuit_failure_threshold: int = 5
     llm_circuit_cooldown_sec: float = 60.0
+    enable_notebook_memory: bool = False
+    notebook_memory_model: str | None = None
+    notebook_memory_max_input_chars: int = 240_000
+    notebook_memory_max_output_tokens: int = 3000
 
     enable_rl_engine: bool = False
     rl_openai_api_key: str | None = None

@@ -38,6 +38,7 @@ from app.services.iteration_metadata_quality import (
     normalize_notebook_execution,
 )
 from app.services.notebook_execution import NotebookExecutionResult, execute_notebook_to_file
+from app.services.notebook_memory import build_notebook_memory, select_relevant_memory_facts
 from app.services.parser_summary import build_parser_summary
 from app.services.review_builder import build_iteration_fix_markdown_section, build_review_markdown
 from app.services.review_metrics import review_metrics
@@ -385,12 +386,31 @@ class ReviewService:
             {"stage": "parse_and_persist", "duration_ms": round((t_after_parse - pipeline_started) * 1000, 2)},
         ]
 
+        llm_service = get_llm_service()
+        notebook_memory_payload: dict[str, Any] = {"status": "disabled", "memory": None, "summary": {}}
+        if project.source_type == "ipynb":
+            t_memory = time.perf_counter()
+            notebook_memory_payload = build_notebook_memory(
+                artifacts=artifact_dicts,
+                criteria=criteria,
+                llm_service=llm_service,
+                settings=get_settings(),
+            )
+            timeline.append(
+                {
+                    "stage": "notebook_memory",
+                    "duration_ms": round((time.perf_counter() - t_memory) * 1000, 2),
+                    "status": notebook_memory_payload.get("status"),
+                }
+            )
+            _deadline_check()
+        project_memory = notebook_memory_payload.get("memory") if isinstance(notebook_memory_payload, dict) else None
+
         t_rules = time.perf_counter()
         raw_results = self.rule_engine.run(artifact_dicts, criteria)
         timeline.append({"stage": "rule_engine", "duration_ms": round((time.perf_counter() - t_rules) * 1000, 2)})
         _deadline_check()
 
-        llm_service = get_llm_service()
         retrieval = get_retrieval_backend()
 
         positives = []
@@ -452,6 +472,14 @@ class ReviewService:
                             "template": fail_text,
                             "evidence": result.get("evidence", []),
                             "style_profile": style_profile,
+                            "project_memory": select_relevant_memory_facts(
+                                project_memory,
+                                criterion_code=criterion_code,
+                                section_name=section_hint or "",
+                                anchor_position_idx=result.get("anchor_position_idx"),
+                                query_text=fail_text,
+                                limit=5,
+                            ),
                             "retrieval_examples": [
                                 {
                                     "text": e.text,
@@ -650,6 +678,11 @@ class ReviewService:
         meta_out["parser_summary"] = build_parser_summary(meta_out, project.source_type)
         meta_out["review_pipeline_timeline"] = timeline
         meta_out["quality_summary"] = build_manual_review_summary(merged_results)
+        if project.source_type == "ipynb":
+            meta_out["notebook_memory_summary"] = notebook_memory_payload.get("summary") or {}
+            meta_out["notebook_memory_status"] = notebook_memory_payload.get("status")
+            if project_memory is not None:
+                meta_out["notebook_memory"] = project_memory
         meta_out["notebook_execution"] = (
             notebook_exec_meta if project.source_type == "ipynb" else {"notebook_execution_not_applicable": True}
         )

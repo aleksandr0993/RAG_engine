@@ -7,6 +7,9 @@ Evidence snippets (JSON): {evidence}
 
 Review style profile / requirements (JSON, authoritative for tone and formatting): {style_profile}
 
+Optional current-notebook project memory (JSON array). These are extractive facts from THIS student's notebook, with evidence cell indices when available. Use them only to avoid contradicting the current work; do not invent facts beyond this memory and evidence:
+{project_memory}
+
 Optional retrieval snippets (JSON array). Fields may include:
 - "source_kind": "general" | "project_training" | "reviewer_reference" — which corpus the line came from (still non-authoritative)
 - "from_reviewer_reference": legacy senior Colab export (same as source_kind reviewer_reference)

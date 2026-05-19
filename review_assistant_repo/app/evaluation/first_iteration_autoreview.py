@@ -14,15 +14,19 @@ from app.exporters.notebook import NotebookCommentInserter
 from app.llm.service import LLMService, get_llm_service
 from app.parsers.notebook import NotebookParser
 from app.retrieval.reviewer_insertions import (
+    choose_insertion_anchor,
     detect_alert_color,
-    extract_reviewer_insertions,
     extract_features,
+    extract_reviewer_insertions,
     load_insertion_rows,
     plain_text,
-    choose_insertion_anchor,
 )
 from app.services.comment_dedup import dedupe_notebook_insertions
-from app.services.finding_policy import apply_low_confidence_and_quality_policy, coerce_source_stage_metadata
+from app.services.finding_policy import (
+    apply_low_confidence_and_quality_policy,
+    coerce_source_stage_metadata,
+)
+from app.services.notebook_memory import build_notebook_memory, select_relevant_memory_facts
 from app.utils.config_loader import load_criteria_map
 from app.utils.notebook_html import build_notebook_comment_html
 
@@ -71,6 +75,20 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
         return json.loads(match.group(0))
     except json.JSONDecodeError:
         return None
+
+
+def _bool_from_json(value: Any, *, default: bool = True) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1", "да"}:
+            return True
+        if normalized in {"false", "no", "0", "нет"}:
+            return False
+    return default
 
 
 def _alert_from_level(level: str) -> str:
@@ -351,11 +369,99 @@ def _average_precision(points: list[tuple[float, int]]) -> float | None:
     return round(precision_sum / positives, 4)
 
 
+def _candidate_keep_score(row: dict[str, Any], *, score_field: str | None = None) -> float:
+    if score_field:
+        value = row.get(score_field)
+        if value is not None:
+            return max(0.0, min(1.0, float(value)))
+    meta = row.get("metadata") or {}
+    for key in ("keep_score", "llm_keep_score", "llm_judge_keep_score"):
+        value = row.get(key, meta.get(key))
+        if value is not None:
+            return max(0.0, min(1.0, float(value)))
+    return max(0.0, min(1.0, float(row.get("confidence") or 0.0)))
+
+
+def _classification_counts(points: list[tuple[float, int]], threshold: float) -> dict[str, Any]:
+    tp = fp = fn = tn = 0
+    for score, label in points:
+        predicted_positive = score >= threshold
+        if predicted_positive and label == 1:
+            tp += 1
+        elif predicted_positive and label == 0:
+            fp += 1
+        elif not predicted_positive and label == 1:
+            fn += 1
+        else:
+            tn += 1
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return {
+        "threshold": round(threshold, 4),
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+        "tn": tn,
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "f1": round(f1, 4),
+    }
+
+
+def _best_f1_threshold(points: list[tuple[float, int]]) -> dict[str, Any]:
+    if not points:
+        return _classification_counts([], 0.5)
+    if not any(label == 1 for _score, label in points):
+        return _classification_counts(points, 1.0)
+    thresholds = sorted({0.0, 1.0, 0.5, *(score for score, _label in points)})
+    best = _classification_counts(points, thresholds[0])
+    for threshold in thresholds[1:]:
+        metrics = _classification_counts(points, threshold)
+        if (metrics["f1"], metrics["precision"], metrics["recall"]) > (
+            best["f1"],
+            best["precision"],
+            best["recall"],
+        ):
+            best = metrics
+    return best
+
+
+def _candidate_breakdowns(labeled: list[dict[str, Any]], *, decision_threshold: float) -> dict[str, Any]:
+    specs = {
+        "by_project": lambda row: str(row.get("project") or "unknown"),
+        "by_criterion_code": lambda row: str(row.get("criterion_code") or "unknown"),
+        "by_status": lambda row: str(row.get("status") or "unknown"),
+        "by_source_stage": lambda row: str((row.get("metadata") or {}).get("source_stage") or "unknown"),
+        "by_comment_kind": lambda row: str(row.get("comment_kind") or "unknown"),
+    }
+    out: dict[str, Any] = {}
+    for name, key_fn in specs.items():
+        buckets: dict[str, list[tuple[float, int]]] = {}
+        for row in labeled:
+            buckets.setdefault(key_fn(row), []).append((float(row.get("keep_score") or 0.0), int(row.get("auc_label") or 0)))
+        out[name] = {
+            key: {
+                "candidate_total": len(points),
+                "positive_candidates": sum(label for _score, label in points),
+                "negative_candidates": len(points) - sum(label for _score, label in points),
+                "roc_auc": _rank_auc(points),
+                "pr_auc_average_precision": _average_precision(points),
+                "at_threshold": _classification_counts(points, decision_threshold),
+            }
+            for key, points in sorted(buckets.items())
+        }
+    return out
+
+
 def label_memory_candidates_for_auc(
     candidates: list[dict[str, Any]],
     gold: list[dict[str, Any]],
     *,
     min_match_score: float = 0.35,
+    decision_threshold: float = 0.5,
+    score_field: str | None = None,
+    project: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     unmatched_gold = set(range(len(gold)))
     labeled: list[dict[str, Any]] = []
@@ -377,11 +483,20 @@ def label_memory_candidates_for_auc(
             label = 1
         row = dict(candidate)
         row["auc_label"] = label
+        row["label"] = label
         row["matched_gold_index"] = matched_gold_index
         row["match_score"] = match_score
+        row["keep_score"] = _candidate_keep_score(row, score_field=score_field)
+        row["project"] = project or row.get("project") or ""
+        if matched_gold_index is not None:
+            p_anchor = row.get("anchor_position_idx")
+            g_anchor = gold[matched_gold_index].get("anchor_position_idx")
+            row["anchor_delta"] = (
+                abs(int(p_anchor) - int(g_anchor)) if p_anchor is not None and g_anchor is not None else None
+            )
         labeled.append(row)
 
-    points = [(float(row.get("confidence") or 0), int(row["auc_label"])) for row in labeled]
+    points = [(float(row.get("keep_score") or 0), int(row["auc_label"])) for row in labeled]
     positives = sum(label for _, label in points)
     summary = {
         "candidate_total": len(labeled),
@@ -389,6 +504,11 @@ def label_memory_candidates_for_auc(
         "negative_candidates": len(labeled) - positives,
         "roc_auc": _rank_auc(points),
         "pr_auc_average_precision": _average_precision(points),
+        "score_field": score_field or "keep_score|confidence",
+        "decision_threshold": round(decision_threshold, 4),
+        "at_threshold": _classification_counts(points, decision_threshold),
+        "best_f1_on_this_set": _best_f1_threshold(points),
+        "breakdowns": _candidate_breakdowns(labeled, decision_threshold=decision_threshold),
     }
     return labeled, summary
 
@@ -397,6 +517,7 @@ def apply_llm_judge_generator(
     candidates: list[dict[str, Any]],
     *,
     artifacts: list[dict[str, Any]],
+    project_memory: dict[str, Any] | None = None,
     llm_service: LLMService | None = None,
     enable_judge: bool = False,
     enable_generator: bool = False,
@@ -426,16 +547,31 @@ def apply_llm_judge_generator(
             refined.append(updated)
             continue
 
+        anchor_ctx = _anchor_context(artifacts, updated.get("anchor_position_idx"))
+        anchor_section = ""
+        cells = anchor_ctx.get("cells") if isinstance(anchor_ctx, dict) else None
+        if isinstance(cells, list) and cells:
+            anchor_section = str((cells[min(1, len(cells) - 1)] or {}).get("section_name") or "")
         context = {
             "candidate": {
                 "criterion_code": updated.get("criterion_code"),
                 "praise_code": updated.get("praise_code"),
+                "status": updated.get("status"),
                 "comment_kind": updated.get("comment_kind"),
                 "alert_color": updated.get("alert_color"),
                 "comment_text": updated.get("comment_text"),
+                "evidence": updated.get("evidence") or [],
                 "memory_candidate_score": meta.get("memory_candidate_score") or updated.get("confidence"),
             },
-            "anchor_context": _anchor_context(artifacts, updated.get("anchor_position_idx")),
+            "anchor_context": anchor_ctx,
+            "project_memory": select_relevant_memory_facts(
+                project_memory,
+                criterion_code=str(updated.get("criterion_code") or ""),
+                section_name=anchor_section,
+                anchor_position_idx=updated.get("anchor_position_idx"),
+                query_text=str(updated.get("comment_text") or ""),
+                limit=5,
+            ),
         }
 
         keep = True
@@ -488,21 +624,57 @@ def apply_llm_judge_generator(
                 meta["llm_classifier_error"] = result.error or "llm_call_failed"
 
         if enable_judge:
+            judge_context = {
+                **context,
+                "candidate": {
+                    **context["candidate"],
+                    "criterion_code": updated.get("criterion_code"),
+                    "praise_code": updated.get("praise_code"),
+                    "status": updated.get("status"),
+                    "comment_kind": updated.get("comment_kind"),
+                    "alert_color": updated.get("alert_color"),
+                    "comment_text": updated.get("comment_text"),
+                },
+            }
             prompt = (
                 "Ты оцениваешь, стоит ли вставлять комментарий ревьюера в учебную Jupyter-тетрадку.\n"
-                "Верни только JSON: {\"keep\": true|false, \"confidence\": 0..1, \"rationale\": \"...\"}.\n"
+                "Верни только JSON: {"
+                '"keep_score": 0..1, '
+                '"keep_decision": true|false, '
+                '"anchor_ok": true|false, '
+                '"criterion_ok": true|false, '
+                '"reason": "..."}.\n'
+                "Для обратной совместимости допустимы старые поля keep/confidence/rationale, но предпочтительны новые.\n"
                 "Оставляй комментарий только если он конкретно относится к anchor_context и не является лишним дублем.\n"
-                f"Данные:\n{json.dumps(context, ensure_ascii=False)[:12000]}"
+                f"Данные:\n{json.dumps(judge_context, ensure_ascii=False)[:12000]}"
             )
             result = llm.chat([{"role": "user", "content": prompt}], temperature=0.1)
             meta["llm_judge_used"] = bool(result.ok)
             if result.ok:
                 parsed = _extract_json_object(result.text)
                 if parsed:
-                    keep = bool(parsed.get("keep", True))
+                    if "keep_decision" in parsed:
+                        keep = _bool_from_json(parsed.get("keep_decision"), default=True)
+                    else:
+                        keep = _bool_from_json(parsed.get("keep"), default=True)
+                    anchor_ok = _bool_from_json(parsed.get("anchor_ok"), default=True)
+                    criterion_ok = _bool_from_json(parsed.get("criterion_ok"), default=True)
+                    if "keep_score" in parsed:
+                        keep_score = max(0.0, min(1.0, float(parsed.get("keep_score") or 0.0)))
+                    else:
+                        confidence = parsed.get("confidence")
+                        keep_confidence = max(0.0, min(1.0, float(confidence if confidence is not None else 0.5)))
+                        keep_score = keep_confidence if keep else 1.0 - keep_confidence
+                    keep = keep and anchor_ok and criterion_ok
+                    updated["keep_score"] = keep_score
                     meta["llm_judge_keep"] = keep
+                    meta["llm_keep_score"] = keep_score
+                    meta["llm_judge_keep_score"] = keep_score
+                    meta["llm_keep_decision"] = keep
+                    meta["llm_anchor_ok"] = anchor_ok
+                    meta["llm_criterion_ok"] = criterion_ok
                     meta["llm_judge_confidence"] = parsed.get("confidence")
-                    meta["llm_judge_rationale"] = str(parsed.get("rationale") or "")[:500]
+                    meta["llm_judge_rationale"] = str(parsed.get("reason") or parsed.get("rationale") or "")[:500]
                 else:
                     meta["llm_judge_error"] = "unparseable_response"
             else:
@@ -616,8 +788,16 @@ def run_offline_autoreview(
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
     criteria = load_criteria_map(criteria_map)
     artifacts, notebook_obj = _parse_artifacts(restored_notebook)
-    raw_results = RuleEngine().run(artifacts, criteria)
     settings = get_settings()
+    llm = llm_service or get_llm_service()
+    notebook_memory_payload = build_notebook_memory(
+        artifacts=artifacts,
+        criteria=criteria,
+        llm_service=llm,
+        settings=settings,
+    )
+    project_memory = notebook_memory_payload.get("memory") if isinstance(notebook_memory_payload, dict) else None
+    raw_results = RuleEngine().run(artifacts, criteria)
     memory_rows = load_insertion_rows(reviewer_insertions_path) if reviewer_insertions_path else []
     if exclude_reviewed_notebook:
         memory_rows = [r for r in memory_rows if r.get("reviewed_notebook") != exclude_reviewed_notebook]
@@ -707,7 +887,8 @@ def run_offline_autoreview(
         memory_candidates = apply_llm_judge_generator(
             memory_candidates,
             artifacts=artifacts,
-            llm_service=llm_service,
+            project_memory=project_memory,
+            llm_service=llm,
             enable_judge=enable_llm_judge,
             enable_generator=enable_llm_generator,
             enable_classifier=enable_llm_classifier,
@@ -823,6 +1004,7 @@ def compare_predictions(predicted: list[dict[str, Any]], gold: list[dict[str, An
 def render_report(payload: dict[str, Any]) -> str:
     s = payload["comparison"]["summary"]
     auc = payload.get("candidate_auc") or {}
+    at_threshold = auc.get("at_threshold") or {}
     lines = [
         "# First-iteration autoreview evaluation",
         "",
@@ -846,12 +1028,32 @@ def render_report(payload: dict[str, Any]) -> str:
         f"- Predicted source stages: {json.dumps(s.get('predicted_source_stage_counts', {}), ensure_ascii=False)}",
         f"- Memory candidate ROC-AUC: {auc.get('roc_auc')}",
         f"- Memory candidate PR-AUC/AP: {auc.get('pr_auc_average_precision')}",
+        f"- Memory candidate F1 @ {at_threshold.get('threshold')}: {at_threshold.get('f1')} "
+        f"(precision: {at_threshold.get('precision')}, recall: {at_threshold.get('recall')})",
         f"- Memory candidates labeled: {auc.get('candidate_total')} "
         f"(TP: {auc.get('positive_candidates')}, FP: {auc.get('negative_candidates')})",
         "",
-        "## Missed Gold",
-        "",
     ]
+    breakdowns = auc.get("breakdowns") or {}
+    lines.extend(["## Candidate Breakdowns", ""])
+    for title, key in [
+        ("Source stage", "by_source_stage"),
+        ("Comment kind", "by_comment_kind"),
+        ("Status", "by_status"),
+    ]:
+        rows = breakdowns.get(key) or {}
+        lines.extend([f"### {title}", "", "| Bucket | Total | Pos | Neg | ROC-AUC | F1 |", "|---|---:|---:|---:|---:|---:|"])
+        if not rows:
+            lines.append("| none | 0 | 0 | 0 |  |  |")
+        else:
+            for bucket, metrics in rows.items():
+                threshold_metrics = metrics.get("at_threshold") or {}
+                lines.append(
+                    f"| `{bucket}` | {metrics.get('candidate_total')} | {metrics.get('positive_candidates')} | "
+                    f"{metrics.get('negative_candidates')} | {metrics.get('roc_auc')} | {threshold_metrics.get('f1')} |"
+                )
+        lines.append("")
+    lines.extend(["## Missed Gold", ""])
     missed = payload["comparison"]["missed_gold"][:30]
     if not missed:
         lines.append("No missed gold comments.")
@@ -889,6 +1091,8 @@ def evaluate_first_iteration(
     enable_llm_classifier: bool = False,
     enable_llm_anchor_validator: bool = False,
     llm_max_candidates: int = 30,
+    decision_threshold: float = 0.5,
+    candidate_score_field: str | None = None,
 ) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     gold = extract_gold_first_review_comments(
@@ -912,7 +1116,13 @@ def evaluate_first_iteration(
         llm_max_candidates=llm_max_candidates,
     )
     comparison = compare_predictions(predicted, gold)
-    labeled_candidates, candidate_auc_summary = label_memory_candidates_for_auc(all_memory_candidates, gold)
+    labeled_candidates, candidate_auc_summary = label_memory_candidates_for_auc(
+        all_memory_candidates,
+        gold,
+        decision_threshold=decision_threshold,
+        score_field=candidate_score_field,
+        project=project,
+    )
     predicted_reviewed = out_dir / "predicted_reviewed.ipynb"
     nbformat.write(reviewed_obj, predicted_reviewed)
     _write_jsonl(gold, out_dir / "gold_first_review_comments.jsonl")
@@ -923,6 +1133,8 @@ def evaluate_first_iteration(
         "restored_notebook": str(restored_notebook),
         "criteria_map": criteria_map,
         "project": project,
+        "decision_threshold": decision_threshold,
+        "candidate_score_field": candidate_score_field,
         "artifacts": {
             "gold_jsonl": str(out_dir / "gold_first_review_comments.jsonl"),
             "predicted_jsonl": str(out_dir / "predicted_insertions.jsonl"),

@@ -70,7 +70,14 @@ class LLMClient:
         content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
         return str(content).strip()
 
-    def _chat(self, messages: list[dict[str, str]], temperature: float = 0.2) -> LLMCallResult:
+    def _chat(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float = 0.2,
+        *,
+        model: str | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMCallResult:
         if not self.enabled:
             return LLMCallResult(ok=False, error="llm_disabled", provider=self._settings.llm_provider, model=self._settings.llm_model)
 
@@ -88,10 +95,12 @@ class LLMClient:
             "Content-Type": "application/json",
         }
         body: dict[str, Any] = {
-            "model": self._settings.llm_model,
+            "model": model or self._settings.llm_model,
             "messages": messages,
             "temperature": temperature,
         }
+        if max_tokens is not None:
+            body["max_tokens"] = int(max_tokens)
 
         attempts = max(1, int(self._settings.llm_max_retries))
 
@@ -115,7 +124,7 @@ class LLMClient:
                 ok=True,
                 text=text,
                 provider=self._settings.llm_provider,
-                model=self._settings.llm_model,
+                model=str(body["model"]),
             )
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code
@@ -155,9 +164,16 @@ class LLMClient:
                 model=self._settings.llm_model,
             )
 
-    def chat(self, messages: list[dict[str, str]], temperature: float = 0.2) -> LLMCallResult:
+    def chat(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float = 0.2,
+        *,
+        model: str | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMCallResult:
         """OpenAI-compatible chat; same availability rules as other LLM calls."""
-        return self._chat(messages, temperature)
+        return self._chat(messages, temperature, model=model, max_tokens=max_tokens)
 
     def classify_text(self, task: str, text: str, context: dict[str, Any] | None = None) -> LLMClassificationResult:
         """
@@ -219,6 +235,7 @@ class LLMClient:
             template=context.get("template", ""),
             evidence=json.dumps(context.get("evidence", []), ensure_ascii=False)[:3000],
             style_profile=json.dumps(context.get("style_profile", {}), ensure_ascii=False)[:5000],
+            project_memory=json.dumps(context.get("project_memory", []), ensure_ascii=False)[:5000],
             retrieval_examples=json.dumps(retrieval, ensure_ascii=False)[:4000],
         )
         result = self._chat([{"role": "user", "content": prompt}], temperature=0.35)

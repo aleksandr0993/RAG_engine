@@ -40,8 +40,15 @@ class LLMService:
             return context.get("fallback_review", "")
         return self._client.synthesize_review(context)
 
-    def chat(self, messages: list[dict[str, str]], temperature: float = 0.2) -> LLMCallResult:
-        return self._client.chat(messages, temperature=temperature)
+    def chat(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float = 0.2,
+        *,
+        model: str | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMCallResult:
+        return self._client.chat(messages, temperature=temperature, model=model, max_tokens=max_tokens)
 
 
 @lru_cache(maxsize=1)

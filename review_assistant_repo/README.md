@@ -145,6 +145,17 @@ Set in `.env` (see `.env.example`):
 
 If LLM is off or the key is missing, reviews complete using rules + heuristics only.
 
+Для Jupyter-проектов можно включить один предварительный notebook-wide pass, чтобы LLM построила явную карту текущей тетрадки перед генерацией/отбором комментариев:
+
+```env
+ENABLE_NOTEBOOK_MEMORY=true
+NOTEBOOK_MEMORY_MODEL=gpt-5-nano
+NOTEBOOK_MEMORY_MAX_INPUT_CHARS=240000
+NOTEBOOK_MEMORY_MAX_OUTPUT_TOKENS=3000
+```
+
+Результат сохраняется в `metadata_json.notebook_memory`, а `metadata_json.notebook_memory_summary` содержит статус, оценку токенов/стоимости и размеры compact input. Если память выключена, LLM недоступна или ответ не распарсился, review pipeline продолжает работать через rules/heuristics как раньше.
+
 ### Review style requirements
 
 По умолчанию используется профиль `practicum_review_requirements_v1`, собранный из методички «Требования к оформлению ревью». Он задаёт тон, цветовую разметку комментариев (`danger` / `warning` / `success` + значки), правила приветственного и итогового комментария, постепенное усиление подсказок на повторных проверках и запрет на прямую правку кода студента.
@@ -225,6 +236,27 @@ python ../scripts/build_reviewer_insertion_memory_from_archive.py \
 ```
 
 Скрипт поддерживает `.ipynb`, директории, `.zip`, `.tar`, `.tar.gz`, `.tgz`; пишет `manifest.jsonl`, `problem_files.txt`, восстановленные исходники в `restored_sources/`, а в отчётах подсвечивает неоднозначные случаи: отсутствие ревью-комментариев, нераспознанный цвет, слабые якоря и высокий процент комментариев без `criterion_code`.
+
+### LLM-judge / reranker dataset для F1 и ROC-AUC
+
+Для обучения и оценки отбора замечаний используйте пары `restored/source .ipynb → human-reviewed .ipynb`. Manifest — JSONL, одна строка на пару:
+
+```json
+{"id":"case-001","split":"val","restored":"./data/pairs/case-001/source.ipynb","reviewed":"./data/pairs/case-001/reviewed.ipynb","project":"games_preprocessing","criteria_map":"notebook_games_preprocessing_v1","reviewer_insertions_path":"./data/reviewer_insertions/games_preprocessing.jsonl"}
+```
+
+Сборка labeled keep/drop датасета кандидатов:
+
+```bash
+python scripts/build_first_iteration_candidate_dataset.py \
+  --pairs-jsonl ./data/eval_pairs.jsonl \
+  --out-dir ./data/autoreview_candidate_eval \
+  --memory-candidate-min-score 0.35 \
+  --enable-notebook-memory \
+  --notebook-memory-model gpt-5-nano
+```
+
+Скрипт пишет `candidates_labeled.jsonl`, per-pair отчёты и `summary.json` с ROC-AUC, PR-AUC/AP, precision/recall/F1 и breakdown по проекту, критерию, статусу, source stage и типу комментария. Если `--decision-threshold` не задан, порог выбирается по лучшему F1 только на `split="val"`; для test используйте зафиксированный порог из `summary.json`.
 
 ### Project-specific briefs: Practicum Wiki HTML → course KB
 

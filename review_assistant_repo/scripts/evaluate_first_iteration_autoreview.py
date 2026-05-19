@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -49,11 +50,37 @@ def parse_args() -> argparse.Namespace:
         help="Use LLM to validate that selected memory comments belong near their proposed anchors.",
     )
     parser.add_argument("--llm-max-candidates", type=int, default=30, help="Maximum selected memory candidates sent to LLM.")
+    parser.add_argument("--enable-notebook-memory", action="store_true", help="Build one notebook-wide LLM memory before judge/generator calls.")
+    parser.add_argument("--notebook-memory-model", default=None, help="Optional model override for notebook memory.")
+    parser.add_argument("--notebook-memory-max-input-chars", type=int, default=None)
+    parser.add_argument("--notebook-memory-max-output-tokens", type=int, default=None)
+    parser.add_argument(
+        "--decision-threshold",
+        type=float,
+        default=0.5,
+        help="Fixed keep_score threshold for candidate precision/recall/F1 reporting.",
+    )
+    parser.add_argument(
+        "--candidate-score-field",
+        default=None,
+        help="Optional candidate score field to use instead of keep_score/confidence for ROC-AUC/F1.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.enable_notebook_memory:
+        os.environ["ENABLE_NOTEBOOK_MEMORY"] = "true"
+    if args.notebook_memory_model:
+        os.environ["NOTEBOOK_MEMORY_MODEL"] = args.notebook_memory_model
+    if args.notebook_memory_max_input_chars is not None:
+        os.environ["NOTEBOOK_MEMORY_MAX_INPUT_CHARS"] = str(args.notebook_memory_max_input_chars)
+    if args.notebook_memory_max_output_tokens is not None:
+        os.environ["NOTEBOOK_MEMORY_MAX_OUTPUT_TOKENS"] = str(args.notebook_memory_max_output_tokens)
+    from app.config import get_settings
+
+    get_settings.cache_clear()
     payload = evaluate_first_iteration(
         reviewed_notebook=args.reviewed,
         restored_notebook=args.restored,
@@ -69,6 +96,8 @@ def main() -> None:
         enable_llm_classifier=args.enable_llm_classifier,
         enable_llm_anchor_validator=args.enable_llm_anchor_validator,
         llm_max_candidates=args.llm_max_candidates,
+        decision_threshold=args.decision_threshold,
+        candidate_score_field=args.candidate_score_field,
     )
     summary = payload["comparison"]["summary"]
     print(json.dumps(summary, ensure_ascii=False, indent=2))
