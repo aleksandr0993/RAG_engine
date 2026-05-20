@@ -65,6 +65,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional candidate score field to use instead of keep_score/confidence for ROC-AUC/F1.",
     )
+    parser.add_argument("--enable-quality-judge", action="store_true", help="Run offline LLM rubric judge for review quality metrics.")
+    parser.add_argument("--quality-judge-model", default=None, help="Optional model override for the quality judge.")
+    parser.add_argument("--quality-judge-max-items", type=int, default=100)
+    parser.add_argument("--quality-judge-min-source-support", default="medium", choices=["none", "weak", "medium", "strong"])
+    parser.add_argument("--quality-score-threshold", type=float, default=0.7)
     return parser.parse_args()
 
 
@@ -98,10 +103,17 @@ def main() -> None:
         llm_max_candidates=args.llm_max_candidates,
         decision_threshold=args.decision_threshold,
         candidate_score_field=args.candidate_score_field,
+        enable_quality_judge=args.enable_quality_judge,
+        quality_judge_model=args.quality_judge_model,
+        quality_judge_max_items=args.quality_judge_max_items,
+        quality_judge_min_source_support=args.quality_judge_min_source_support,
+        quality_score_threshold=args.quality_score_threshold,
     )
     summary = payload["comparison"]["summary"]
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     print("candidate_auc=" + json.dumps(payload.get("candidate_auc", {}), ensure_ascii=False))
+    if payload.get("quality_summary"):
+        print("quality_summary=" + json.dumps(payload["quality_summary"], ensure_ascii=False))
     print(f"report_md={payload['artifacts']['report_md']}")
     print(f"comparison_json={payload['artifacts']['comparison_json']}")
 

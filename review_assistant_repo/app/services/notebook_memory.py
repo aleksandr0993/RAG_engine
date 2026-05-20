@@ -25,6 +25,8 @@ _MEMORY_KEYS = {
     "data_flow",
     "key_findings",
     "risk_flags",
+    "accepted_pattern_matches",
+    "error_pattern_matches",
     "evidence_cell_indices",
 }
 
@@ -191,7 +193,7 @@ def build_notebook_memory(
     user = (
         "Read the compact notebook representation and criteria. Return JSON with exactly these keys: "
         "project_steps, cell_timeline, completed_requirements, missing_requirements, data_flow, "
-        "key_findings, risk_flags, evidence_cell_indices. "
+        "key_findings, risk_flags, accepted_pattern_matches, error_pattern_matches, evidence_cell_indices. "
         "Every factual item must include evidence_cell_indices when possible. "
         "Be concise and extractive; do not invent facts.\n\n"
         f"{payload_json}"

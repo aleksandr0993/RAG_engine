@@ -425,6 +425,74 @@ def test_evaluate_first_iteration_writes_artifacts(tmp_path: Path):
     assert "First-iteration autoreview evaluation" in (tmp_path / "eval" / "report.md").read_text(encoding="utf-8")
 
 
+def test_evaluate_first_iteration_quality_judge_adds_artifact_block(tmp_path: Path):
+    class FakeQualityLLM:
+        is_available = True
+
+        def chat(self, messages, temperature=0.2, *, model=None, max_tokens=None):
+            return LLMCallResult(
+                ok=True,
+                text=(
+                    '{"comment_helpfulness_score": 0.91, "pedagogy_score": 0.82, '
+                    '"no_direct_solution": true, "style_match_score": 0.76, '
+                    '"anchor_ok": true, "anchor_score": 0.9, "evidence_support": "strong", '
+                    '"risk_flags": [], "needs_human_review": false, "reason": "grounded"}'
+                ),
+            )
+
+    restored = tmp_path / "restored.ipynb"
+    reviewed = tmp_path / "reviewed.ipynb"
+    _write_nb(restored, [new_code_cell("df.columns = df.columns.str.lower()\ndf.info()")])
+    _write_nb(
+        reviewed,
+        [
+            new_code_cell("df.columns = df.columns.str.lower()\ndf.info()"),
+            new_markdown_cell(_review_comment("Комментарий ревьюера", "Названия столбцов приведены к snake_case")),
+        ],
+    )
+    memory = tmp_path / "memory.jsonl"
+    memory.write_text(
+        json.dumps(
+            {
+                "example_id": "ok-columns",
+                "project_type": "python_preprocessing",
+                "review_iteration": 1,
+                "reviewed_notebook": "other.ipynb",
+                "comment_kind": "criterion_success",
+                "alert_color": "warning",
+                "criterion_code": "games_columns_snake_case",
+                "comment_text": "Комментарий ревьюера Названия столбцов приведены к snake_case",
+                "anchor_before": {"features": ["columns", "lower"]},
+                "local_context": {"before_text": "df.columns = df.columns.str.lower()"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = evaluate_first_iteration(
+        reviewed_notebook=reviewed,
+        restored_notebook=restored,
+        project="python_preprocessing",
+        criteria_map="notebook_games_preprocessing_v1",
+        out_dir=tmp_path / "quality_eval",
+        reviewer_insertions_path=memory,
+        memory_candidate_min_score=0.1,
+        enable_quality_judge=True,
+        quality_llm_service=FakeQualityLLM(),
+    )
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "quality_eval" / "all_memory_candidates_labeled.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert any((row.get("quality_eval") or {}).get("comment_helpfulness_score") == 0.91 for row in rows)
+    assert payload["quality_summary"]["quality_ok"] >= 1
+    assert "Quality Metrics" in (tmp_path / "quality_eval" / "report.md").read_text(encoding="utf-8")
+
+
 def test_evaluate_first_iteration_cli(tmp_path: Path):
     repo = Path(__file__).resolve().parents[1]
     restored = tmp_path / "restored.ipynb"

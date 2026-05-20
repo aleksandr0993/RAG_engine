@@ -273,10 +273,21 @@ class ChangelogResponse(BaseModel):
 
 class StudentAssistantSourceDTO(BaseModel):
     label: str
-    source_kind: Literal["project_doc", "course_base"]
+    source_kind: Literal[
+        "project_doc",
+        "course_base",
+        "notebook_memory",
+        "criteria",
+        "senior_solution",
+        "reviewer_style",
+        "accepted_pattern",
+        "external_web",
+    ]
     excerpt: str
     score: float
     artifact_id: str | None = None
+    url: str | None = None
+    citation: str | None = None
 
 
 class StudentAssistantChatRequest(BaseModel):
@@ -288,3 +299,8 @@ class StudentAssistantChatResponse(BaseModel):
     sources: list[StudentAssistantSourceDTO] = Field(default_factory=list)
     needs_teacher: bool = False
     mode: Literal["extractive", "llm"] = "extractive"
+    intent: str = "unknown"
+    confidence: float = 0.0
+    context_summary: str = ""
+    used_memory: bool = False
+    needs_teacher_reason: str | None = None

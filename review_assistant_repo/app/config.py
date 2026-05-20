@@ -76,6 +76,8 @@ class Settings(BaseSettings):
     student_assistant_project_boost: float = 1.35
     student_assistant_top_k: int = 8
     student_assistant_answer_sources: int = 3
+    enable_external_knowledge: bool = False
+    external_knowledge_path: str | None = None
 
     # Optional semantic / hybrid retrieval (see app/retrieval/embed_backend.py)
     enable_semantic_retrieval: bool = False

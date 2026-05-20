@@ -156,6 +156,21 @@ NOTEBOOK_MEMORY_MAX_OUTPUT_TOKENS=3000
 
 Результат сохраняется в `metadata_json.notebook_memory`, а `metadata_json.notebook_memory_summary` содержит статус, оценку токенов/стоимости и размеры compact input. Если память выключена, LLM недоступна или ответ не распарсился, review pipeline продолжает работать через rules/heuristics как раньше.
 
+### Student Assistant and questions inside notebooks
+
+`POST /api/v1/projects/{id}/assistant/chat` uses a source-priority RAG stack: current project artifacts and `notebook_memory`, criteria map, course KB, senior/reference review rows, reviewer-style examples, accepted patterns, and optional cited external notes. The response includes `intent`, `confidence`, `context_summary`, `used_memory`, `needs_teacher_reason`, and source citations where available.
+
+For `.ipynb` reviews, markdown cells marked `Комментарий студента` are parsed as student questions when they contain question-like text. After `notebook_memory`, the pipeline prepares answers and stores them in `metadata_json.student_question_answers`; v1 does not insert those answers back into the notebook automatically.
+
+External knowledge is intentionally offline/cached and off by default:
+
+```env
+ENABLE_EXTERNAL_KNOWLEDGE=false
+# EXTERNAL_KNOWLEDGE_PATH=./data/external_knowledge.jsonl
+```
+
+Rows from `EXTERNAL_KNOWLEDGE_PATH` are used only as explanatory `external_web` sources with URL/citation metadata. They must not override grading criteria, course KB, or senior solution facts.
+
 ### Review style requirements
 
 По умолчанию используется профиль `practicum_review_requirements_v1`, собранный из методички «Требования к оформлению ревью». Он задаёт тон, цветовую разметку комментариев (`danger` / `warning` / `success` + значки), правила приветственного и итогового комментария, постепенное усиление подсказок на повторных проверках и запрет на прямую правку кода студента.
@@ -215,9 +230,19 @@ python scripts/build_review_training_corpus.py \
   --finetune-out ./data/finetune_dialogue.jsonl
 ```
 
-3. В `.env`: `ENABLE_RETRIEVAL=true`, `ENABLE_LLM_COMMENT_GENERATION=true`, `ENABLE_PROJECT_REVIEW_TRAINING=true`, `PROJECT_REVIEW_TRAINING_PATH=./data/project_training.jsonl` (или каталог с несколькими `.jsonl`). В runtime-корпус попадают только `reviewer` и `middle_reviewer`; `finetune-out` содержит также `student` для внешнего fine-tuning.
+3. В `.env`: `ENABLE_RETRIEVAL=true`, `ENABLE_LLM_COMMENT_GENERATION=true`, `ENABLE_PROJECT_REVIEW_TRAINING=true`, `PROJECT_REVIEW_TRAINING_PATH=./data/project_training.jsonl` (или каталог с несколькими `.jsonl`). В runtime-корпус попадают `reviewer` и `middle_reviewer` как review/style references; `finetune-out` содержит также `student` для внешнего fine-tuning и анализа диалогов.
 4. **Фильтр проекта**: при загрузке ноутбука передайте форму `review_training_project` (тот же slug, что в `--project` при сборке JSONL), либо задайте глобально `PROJECT_REVIEW_TRAINING_FILTER_PROJECT`. Строки с пустым `source_project` в JSONL считаются wildcard.
 5. **Секция**: для `.ipynb` примеры из корпуса сортируются по совпадению `section_name` с секцией якорной ячейки критерия.
+
+Импортёр добавляет `lane` / `source_kind` для управляемой памяти ревьюера:
+
+- `rubric_truth` / `senior_solution` — факты и решения старшего ревьюера.
+- `reviewer_style` — тон, формулировки, структура замечаний.
+- `accepted_patterns` — positive examples достаточного решения из зачтённых ноутбуков.
+- `negative/error_patterns` — незачёты, повторные итерации и типичные ошибки.
+- `student_question_dialogues` — вопросы студентов и контекст ответов.
+
+Зачтённые ноутбуки помогают как positive reference, но не заменяют критерии: generator/judge обязан привязывать вывод к evidence текущей тетрадки и не копировать прошлый комментарий дословно.
 
 См. `notebooks/colab_project_training_batch.ipynb` для Colab.
 
@@ -257,6 +282,32 @@ python scripts/build_first_iteration_candidate_dataset.py \
 ```
 
 Скрипт пишет `candidates_labeled.jsonl`, per-pair отчёты и `summary.json` с ROC-AUC, PR-AUC/AP, precision/recall/F1 и breakdown по проекту, критерию, статусу, source stage и типу комментария. Если `--decision-threshold` не задан, порог выбирается по лучшему F1 только на `split="val"`; для test используйте зафиксированный порог из `summary.json`.
+
+Для offline-оценки качества “как живое ревью” можно включить LLM rubric judge. Это не влияет на production-review и добавляет `quality_eval` / `quality_summary` только в eval artifacts:
+
+```bash
+python scripts/build_first_iteration_candidate_dataset.py \
+  --pairs-jsonl ./data/eval_pairs.jsonl \
+  --out-dir ./data/autoreview_candidate_eval_quality \
+  --enable-quality-judge \
+  --quality-judge-model gpt-5-mini \
+  --quality-judge-max-items 100 \
+  --quality-judge-min-source-support medium \
+  --quality-score-threshold 0.7
+```
+
+Метрики quality judge: полезность комментария, педагогичность, отсутствие прямого решения, соответствие стилю, правильность anchor и evidence support (`strong` / `medium` / `weak` / `none`). `weak` и `none` считаются риском hallucination и попадают в `needs_human_review`.
+
+Для ответов на вопросы студентов из `metadata_json.student_question_answers` или JSONL:
+
+```bash
+python scripts/evaluate_student_qa_quality.py \
+  --answers-json ./data/project_export.json \
+  --out-dir ./data/student_qa_quality \
+  --quality-judge-model gpt-5-mini
+```
+
+Скрипт пишет `student_qa_quality.jsonl`, `summary.json`, `report.md` и считает корректность ответа, педагогичность, отсутствие прямого решения, evidence support и необходимость ручной проверки.
 
 ### Project-specific briefs: Practicum Wiki HTML → course KB
 

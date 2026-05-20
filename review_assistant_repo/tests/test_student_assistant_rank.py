@@ -19,3 +19,12 @@ def test_rank_orders_by_relevance():
     ]
     ranked = rank_knowledge_chunks("ctr metrics", chunks, project_boost=1.0)
     assert "metrics" in ranked[0][0].text
+
+
+def test_rank_can_use_notebook_memory_and_external_sources():
+    chunks = [
+        KnowledgeChunk("m", "roc auc выбран для несбалансированной классификации", "notebook_memory", "notebook_memory:key_findings"),
+        KnowledgeChunk("e", "roc auc sklearn docs", "external_web", "sklearn docs", url="https://example.test"),
+    ]
+    ranked = rank_knowledge_chunks("roc auc классификация", chunks, project_boost=1.0)
+    assert ranked[0][0].source_kind in {"notebook_memory", "external_web"}

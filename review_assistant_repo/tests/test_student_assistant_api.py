@@ -48,6 +48,9 @@ def test_assistant_chat_project_and_course_kb(client_course_kb: TestClient):
     assert r1.status_code == 200
     body1 = r1.json()
     assert "четверг" in body1["answer"].lower() or "18" in body1["answer"]
+    assert body1["intent"] == "deadline/admin"
+    assert "context_summary" in body1
+    assert "used_memory" in body1
     kinds = {s["source_kind"] for s in body1["sources"]}
     assert "course_base" in kinds
 
@@ -60,6 +63,45 @@ def test_assistant_chat_project_and_course_kb(client_course_kb: TestClient):
     joined = body2["answer"].lower()
     assert "ctr" in joined or any("ctr" in s["excerpt"].lower() for s in body2["sources"])
     assert any(s["source_kind"] == "project_doc" for s in body2["sources"])
+
+
+def test_assistant_uses_project_metadata_memory(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'assistant_memory.db'}")
+    monkeypatch.setenv("FILES_ROOT", str(data_dir / "files"))
+    monkeypatch.setenv("EXPORTS_ROOT", str(data_dir / "exports"))
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    from app.main import create_app
+
+    with TestClient(create_app()) as client:
+        sample_path = Path("examples/sample_query.sql")
+        with sample_path.open("rb") as f:
+            up = client.post("/api/v1/projects/upload", files={"file": ("sample_query.sql", f, "application/sql")})
+        pid = up.json()["project_id"]
+
+        from app.db import get_session_local
+        from app.models import Project
+
+        SessionLocal = get_session_local()
+        db = SessionLocal()
+        try:
+            p = db.get(Project, pid)
+            p.metadata_json = {
+                "notebook_memory": {
+                    "key_findings": [{"finding": "ROC-AUC выбран из-за дисбаланса классов", "evidence_cell_indices": [3]}]
+                }
+            }
+            db.commit()
+        finally:
+            db.close()
+
+        r = client.post(f"/api/v1/projects/{pid}/assistant/chat", json={"message": "Почему выбран ROC-AUC?"})
+        assert r.status_code == 200
+        body = r.json()
+        assert any(s["source_kind"] == "notebook_memory" for s in body["sources"])
+        assert body["used_memory"] is True
 
 
 def test_assistant_unknown_project(client_course_kb: TestClient):

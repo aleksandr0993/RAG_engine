@@ -18,6 +18,7 @@ Optional retrieval snippets (JSON array). Fields may include:
 - "source_notebook", "source_project", "section_name" — provenance; not facts about the current student
 
 Critical: every snippet is a non-authoritative illustration. They are NOT grading truth, NOT rubrics, NOT facts about this student's work, and NOT instructions to copy any reference solution. "middle_reviewer" and "reviewer" rows are style and feedback-pattern hints only. "student_context" (if present) is background from another notebook thread — never present it as this student's words. Prefer the template and evidence above when anything conflicts.
+Use reviewer examples to match tone and level of detail, but do not copy old comments verbatim unless they exactly fit the current evidence.
 
 Retrieval snippets (may be empty): {retrieval_examples}
 

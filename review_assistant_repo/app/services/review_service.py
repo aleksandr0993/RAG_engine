@@ -43,6 +43,7 @@ from app.services.parser_summary import build_parser_summary
 from app.services.review_builder import build_iteration_fix_markdown_section, build_review_markdown
 from app.services.review_metrics import review_metrics
 from app.services.review_snapshot import persist_review_snapshot
+from app.services.student_assistant import answer_student_questions_from_artifacts
 from app.services.verdict import build_verdict
 from app.storage.supabase_storage import supabase_storage_configured, upload_path
 from app.utils.config_loader import (
@@ -405,6 +406,24 @@ class ReviewService:
             )
             _deadline_check()
         project_memory = notebook_memory_payload.get("memory") if isinstance(notebook_memory_payload, dict) else None
+        student_question_answers: list[dict[str, Any]] = []
+        if project.source_type == "ipynb":
+            t_questions = time.perf_counter()
+            student_question_answers = answer_student_questions_from_artifacts(
+                self.db,
+                project.id,
+                artifact_dicts,
+                project_memory=project_memory,
+                settings=get_settings(),
+            )
+            timeline.append(
+                {
+                    "stage": "student_questions",
+                    "duration_ms": round((time.perf_counter() - t_questions) * 1000, 2),
+                    "question_count": len(student_question_answers),
+                }
+            )
+            _deadline_check()
 
         t_rules = time.perf_counter()
         raw_results = self.rule_engine.run(artifact_dicts, criteria)
@@ -683,6 +702,7 @@ class ReviewService:
             meta_out["notebook_memory_status"] = notebook_memory_payload.get("status")
             if project_memory is not None:
                 meta_out["notebook_memory"] = project_memory
+            meta_out["student_question_answers"] = student_question_answers
         meta_out["notebook_execution"] = (
             notebook_exec_meta if project.source_type == "ipynb" else {"notebook_execution_not_applicable": True}
         )

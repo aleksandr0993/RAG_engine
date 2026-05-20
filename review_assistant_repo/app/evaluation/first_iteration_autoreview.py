@@ -10,6 +10,11 @@ import nbformat
 
 from app.analyzers.rules import RuleEngine
 from app.config import get_settings
+from app.evaluation.quality_metrics import (
+    aggregate_quality_evals,
+    evaluate_comment_rows_quality,
+    render_quality_summary_markdown,
+)
 from app.exporters.notebook import NotebookCommentInserter
 from app.llm.service import LLMService, get_llm_service
 from app.parsers.notebook import NotebookParser
@@ -643,6 +648,8 @@ def apply_llm_judge_generator(
                 '"keep_decision": true|false, '
                 '"anchor_ok": true|false, '
                 '"criterion_ok": true|false, '
+                '"source_support": "strong|medium|weak|none", '
+                '"style_match_score": 0..1, '
                 '"reason": "..."}.\n'
                 "Для обратной совместимости допустимы старые поля keep/confidence/rationale, но предпочтительны новые.\n"
                 "Оставляй комментарий только если он конкретно относится к anchor_context и не является лишним дублем.\n"
@@ -673,6 +680,11 @@ def apply_llm_judge_generator(
                     meta["llm_keep_decision"] = keep
                     meta["llm_anchor_ok"] = anchor_ok
                     meta["llm_criterion_ok"] = criterion_ok
+                    source_support = str(parsed.get("source_support") or "").strip().lower()
+                    if source_support in {"strong", "medium", "weak", "none"}:
+                        meta["llm_source_support"] = source_support
+                    if parsed.get("style_match_score") is not None:
+                        meta["llm_style_match_score"] = max(0.0, min(1.0, float(parsed.get("style_match_score") or 0.0)))
                     meta["llm_judge_confidence"] = parsed.get("confidence")
                     meta["llm_judge_rationale"] = str(parsed.get("reason") or parsed.get("rationale") or "")[:500]
                 else:
@@ -785,7 +797,7 @@ def run_offline_autoreview(
     enable_llm_anchor_validator: bool = False,
     llm_max_candidates: int = 30,
     llm_service: LLMService | None = None,
-) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]], dict[str, Any] | None, list[dict[str, Any]]]:
     criteria = load_criteria_map(criteria_map)
     artifacts, notebook_obj = _parse_artifacts(restored_notebook)
     settings = get_settings()
@@ -912,7 +924,7 @@ def run_offline_autoreview(
 
     deduped = dedupe_notebook_insertions(notebook_insertions)
     reviewed_obj = NotebookCommentInserter().insert_comments(notebook_obj, deduped)
-    return predicted, reviewed_obj, all_memory_candidates
+    return predicted, reviewed_obj, all_memory_candidates, project_memory, artifacts
 
 
 def _match_score(pred: dict[str, Any], gold: dict[str, Any]) -> float:
@@ -1072,6 +1084,8 @@ def render_report(payload: dict[str, Any]) -> str:
             text = str(row.get("comment_text") or "").replace("\n", " ")[:180]
             lines.append(f"| {row.get('status')} | `{row.get('criterion_code')}` | {row.get('anchor_position_idx')} | {text} |")
     lines.append("")
+    if payload.get("quality_summary"):
+        lines.extend(render_quality_summary_markdown(payload["quality_summary"]))
     return "\n".join(lines)
 
 
@@ -1093,6 +1107,12 @@ def evaluate_first_iteration(
     llm_max_candidates: int = 30,
     decision_threshold: float = 0.5,
     candidate_score_field: str | None = None,
+    enable_quality_judge: bool = False,
+    quality_judge_model: str | None = None,
+    quality_judge_max_items: int = 100,
+    quality_judge_min_source_support: str = "medium",
+    quality_score_threshold: float = 0.7,
+    quality_llm_service: LLMService | None = None,
 ) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     gold = extract_gold_first_review_comments(
@@ -1100,7 +1120,7 @@ def evaluate_first_iteration(
         reviewed_notebook=reviewed_notebook,
         project=project,
     )
-    predicted, reviewed_obj, all_memory_candidates = run_offline_autoreview(
+    predicted, reviewed_obj, all_memory_candidates, project_memory, artifacts = run_offline_autoreview(
         restored_notebook=restored_notebook,
         criteria_map=criteria_map,
         project=project,
@@ -1123,6 +1143,23 @@ def evaluate_first_iteration(
         score_field=candidate_score_field,
         project=project,
     )
+    quality_summary: dict[str, Any] | None = None
+    if enable_quality_judge:
+        criteria = load_criteria_map(criteria_map)
+        labeled_candidates = evaluate_comment_rows_quality(
+            labeled_candidates,
+            artifacts=artifacts,
+            criteria=criteria,
+            gold=gold,
+            project_memory=project_memory,
+            llm_service=quality_llm_service,
+            model=quality_judge_model,
+            max_items=quality_judge_max_items,
+            decision_threshold=decision_threshold,
+            quality_score_threshold=quality_score_threshold,
+            min_source_support=quality_judge_min_source_support,
+        )
+        quality_summary = aggregate_quality_evals(labeled_candidates)
     predicted_reviewed = out_dir / "predicted_reviewed.ipynb"
     nbformat.write(reviewed_obj, predicted_reviewed)
     _write_jsonl(gold, out_dir / "gold_first_review_comments.jsonl")
@@ -1146,6 +1183,8 @@ def evaluate_first_iteration(
         "comparison": comparison,
         "candidate_auc": candidate_auc_summary,
     }
+    if quality_summary is not None:
+        payload["quality_summary"] = quality_summary
     (out_dir / "comparison.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "report.md").write_text(render_report(payload), encoding="utf-8")
     return payload

@@ -20,6 +20,31 @@ from app.parsers.notebook import (
 )
 
 
+def _notebook_verdict(nb: Any) -> str:
+    meta = getattr(nb, "metadata", {}) or {}
+    if not isinstance(meta, dict):
+        return "unknown"
+    for key in ("final_verdict", "review_verdict", "verdict", "status"):
+        value = str(meta.get(key) or "").strip().lower()
+        if value:
+            if value in {"pass", "accepted", "done", "approved", "зачет", "зачёт"}:
+                return "accepted"
+            if value in {"revise", "failed", "needs_work", "not_accepted", "незачет", "незачёт"}:
+                return "needs_work"
+            return value
+    return "unknown"
+
+
+def _lane_for_role(role: str, verdict: str) -> str:
+    if role == "student":
+        return "student_question_dialogues"
+    if verdict == "accepted":
+        return "accepted_patterns"
+    if verdict == "needs_work":
+        return "negative/error_patterns"
+    return "reviewer_style"
+
+
 def _prior_work_context(nb: Any, cell_idx: int) -> str:
     """Nearest substantive cell before `cell_idx`: explicit student comment or substantive code/markdown."""
     for j in range(cell_idx - 1, -1, -1):
@@ -58,6 +83,7 @@ def extract_rows_from_ipynb(
     parser = NotebookParser()
     artifacts, _nbdict = parser.parse(str(path))
     nb = nbformat.read(str(path), as_version=4)
+    verdict = _notebook_verdict(nb)
 
     runtime: list[dict[str, Any]] = []
     finetune: list[dict[str, Any]] = []
@@ -95,7 +121,14 @@ def extract_rows_from_ipynb(
             "source_project": source_project,
             "source_notebook": nb_name,
             "student_context": student_ctx,
-            "tags": ["master_review", role],
+            "lane": _lane_for_role(role, verdict),
+            "source_kind": "project_training",
+            "final_verdict": verdict,
+            "review_iteration": int(meta.get("review_iteration") or 1),
+            "anchor_position_idx": idx,
+            "comment_kind": str(meta.get("comment_kind") or ""),
+            "alert_color": str(meta.get("alert_color") or ""),
+            "tags": ["master_review", role, _lane_for_role(role, verdict)],
         }
 
         finetune.append(
@@ -109,6 +142,9 @@ def extract_rows_from_ipynb(
                 "review_text": text,
                 "source_project": source_project,
                 "source_notebook": nb_name,
+                "lane": base["lane"],
+                "final_verdict": verdict,
+                "review_iteration": base["review_iteration"],
             }
         )
 

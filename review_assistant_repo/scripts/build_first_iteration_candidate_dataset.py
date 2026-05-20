@@ -35,6 +35,7 @@ from app.evaluation.first_iteration_autoreview import (
     _rank_auc,
     evaluate_first_iteration,
 )
+from app.evaluation.quality_metrics import aggregate_quality_evals
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -94,6 +95,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--notebook-memory-model", default=None)
     parser.add_argument("--notebook-memory-max-input-chars", type=int, default=None)
     parser.add_argument("--notebook-memory-max-output-tokens", type=int, default=None)
+    parser.add_argument("--enable-quality-judge", action="store_true", help="Run offline LLM rubric judge for review quality metrics.")
+    parser.add_argument("--quality-judge-model", default=None)
+    parser.add_argument("--quality-judge-max-items", type=int, default=100)
+    parser.add_argument("--quality-judge-min-source-support", default="medium", choices=["none", "weak", "medium", "strong"])
+    parser.add_argument("--quality-score-threshold", type=float, default=0.7)
     return parser.parse_args()
 
 
@@ -152,6 +158,11 @@ def main() -> None:
             llm_max_candidates=args.llm_max_candidates,
             decision_threshold=preliminary_threshold,
             candidate_score_field=args.candidate_score_field,
+            enable_quality_judge=args.enable_quality_judge,
+            quality_judge_model=args.quality_judge_model,
+            quality_judge_max_items=args.quality_judge_max_items,
+            quality_judge_min_source_support=args.quality_judge_min_source_support,
+            quality_score_threshold=args.quality_score_threshold,
         )
         pair_candidates = _load_jsonl(Path(payload["artifacts"]["all_memory_candidates_labeled_jsonl"]))
         for candidate in pair_candidates:
@@ -201,6 +212,8 @@ def main() -> None:
             "summary_json": str(out_dir / "summary.json"),
         },
     }
+    if args.enable_quality_judge:
+        summary["quality_summary"] = aggregate_quality_evals(all_candidates)
 
     _write_jsonl(all_candidates, out_dir / "candidates_labeled.jsonl")
     (out_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")

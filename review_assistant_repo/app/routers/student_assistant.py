@@ -54,4 +54,9 @@ def student_assistant_chat(
         sources=sources,
         needs_teacher=raw["needs_teacher"],
         mode=raw["mode"],
+        intent=raw.get("intent", "unknown"),
+        confidence=float(raw.get("confidence") or 0.0),
+        context_summary=raw.get("context_summary", ""),
+        used_memory=bool(raw.get("used_memory")),
+        needs_teacher_reason=raw.get("needs_teacher_reason"),
     )

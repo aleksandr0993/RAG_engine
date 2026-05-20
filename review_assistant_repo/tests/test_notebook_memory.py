@@ -171,3 +171,53 @@ def test_review_pipeline_with_notebook_memory_metadata(tmp_path: Path, monkeypat
     assert meta["notebook_memory_summary"]["cost_estimate"]["model"] == "gpt-5-nano"
     assert any(stage["stage"] == "notebook_memory" for stage in meta["review_pipeline_timeline"])
     get_settings.cache_clear()
+
+
+def test_review_pipeline_answers_student_questions_metadata(tmp_path: Path, monkeypatch):
+    data_dir = tmp_path / "data"
+    kb = tmp_path / "course_kb"
+    kb.mkdir()
+    (kb / "metrics.md").write_text("ROC-AUC помогает оценивать качество ранжирования классов.", encoding="utf-8")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'questions.db'}")
+    monkeypatch.setenv("FILES_ROOT", str(data_dir / "files"))
+    monkeypatch.setenv("EXPORTS_ROOT", str(data_dir / "exports"))
+    monkeypatch.setenv("ENABLE_NOTEBOOK_EXECUTION", "false")
+    monkeypatch.setenv("STUDENT_COURSE_KB_DIR", str(kb))
+    monkeypatch.setenv("STUDENT_ASSISTANT_USE_LLM", "false")
+
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    from app.main import create_app
+
+    notebook_path = tmp_path / "student_q.ipynb"
+    nbformat.write(
+        new_notebook(
+            cells=[
+                new_code_cell("from sklearn.metrics import roc_auc_score\nroc_auc_score([0,1],[0.2,0.8])"),
+                new_markdown_cell("Комментарий студента\n\nПочему здесь ROC-AUC, а не accuracy?"),
+            ]
+        ),
+        notebook_path,
+    )
+
+    with TestClient(create_app()) as client:
+        with notebook_path.open("rb") as fh:
+            upload = client.post(
+                "/api/v1/projects/upload",
+                files={"file": ("student_q.ipynb", fh, "application/octet-stream")},
+                data={"criteria_map_code": "notebook_games_preprocessing_v1"},
+            )
+        assert upload.status_code == 200
+        pid = upload.json()["project_id"]
+        reviewed = client.post(f"/api/v1/projects/{pid}/review")
+        assert reviewed.status_code == 200
+        project = client.get(f"/api/v1/projects/{pid}").json()
+
+    answers = project["metadata_json"]["student_question_answers"]
+    assert len(answers) == 1
+    assert answers[0]["intent"] == "concept"
+    assert "ROC-AUC" in answers[0]["question"] or "roc" in answers[0]["question"].lower()
+    assert any(s["source_kind"] in {"course_base", "project_doc"} for s in answers[0]["sources"])
+    assert any(stage["stage"] == "student_questions" for stage in project["metadata_json"]["review_pipeline_timeline"])
+    get_settings.cache_clear()

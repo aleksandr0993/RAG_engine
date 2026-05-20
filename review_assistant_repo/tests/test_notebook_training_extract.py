@@ -27,3 +27,24 @@ def test_extract_runtime_excludes_student(tmp_path: Path):
     assert roles_ft == {"reviewer", "middle_reviewer", "student"}
     rev = next(r for r in runtime if r["author_role"] == "reviewer")
     assert "pandas" in rev["student_context"] or "df" in rev["student_context"]
+    assert rev["lane"] == "reviewer_style"
+    assert rev["source_kind"] == "project_training"
+    assert "review_iteration" in rev
+
+
+def test_extract_training_marks_accepted_lane(tmp_path: Path):
+    nb = new_notebook(
+        cells=[
+            new_code_cell("x = 1"),
+            new_markdown_cell(f"{REVIEWER_MARKER}\n\nПринято, хороший вывод."),
+        ],
+        metadata={"final_verdict": "pass"},
+    )
+    p = tmp_path / "accepted.ipynb"
+    nbformat.write(nb, p)
+
+    runtime, _finetune = extract_rows_from_ipynb(p, source_project="proj_a")
+
+    assert runtime[0]["lane"] == "accepted_patterns"
+    assert runtime[0]["final_verdict"] == "accepted"
+    assert "accepted_patterns" in runtime[0]["tags"]

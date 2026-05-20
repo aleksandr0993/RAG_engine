@@ -11,6 +11,7 @@ from app.parsers.notebook import (
     STUDENT_MARKER,
     NotebookParser,
     infer_notebook_comment_role,
+    infer_student_question_intent,
     is_practicum_instruction_cell,
     strip_practicum_hints,
 )
@@ -61,6 +62,28 @@ def test_parser_metadata_comment_role(tmp_path: Path):
     assert arts[2].metadata["comment_role"] == "middle_reviewer"
     assert arts[2].metadata["is_middle_reviewer_comment"] is True
     assert arts[3].metadata["comment_role"] == "student"
+    assert arts[3].metadata["is_student_question"] is True
+    assert arts[3].metadata["student_question"] == "Question?"
+    assert arts[3].metadata["question_cell_idx"] == 3
+    assert arts[3].metadata["question_context_window"]
+
+
+def test_student_question_intent_and_topics(tmp_path: Path):
+    nb = new_notebook(
+        cells=[
+            new_code_cell("df = pd.read_csv('x.csv')\ndf.info()"),
+            new_markdown_cell(f"{STUDENT_MARKER}\n\nПочему ROC-AUC лучше accuracy в этом проекте?"),
+        ]
+    )
+    p = tmp_path / "q.ipynb"
+    nbformat.write(nb, p)
+    arts, _ = NotebookParser().parse(str(p))
+    meta = arts[1].metadata
+
+    assert infer_student_question_intent("У меня KeyError, что делать?") == "debug"
+    assert meta["student_question_intent"] == "concept"
+    assert "metrics" in meta["topic_tags"]
+    assert meta["question_context_window"][0]["position_idx"] == 0
 
 
 def test_practicum_instruction_detection():
