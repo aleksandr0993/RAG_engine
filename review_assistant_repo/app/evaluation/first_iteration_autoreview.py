@@ -37,6 +37,8 @@ from app.utils.notebook_html import build_notebook_comment_html
 
 _EXPLICIT_REVIEW_VERSION_RE = re.compile(r"Комментарий\s+ревьюера\s*\d+", re.IGNORECASE)
 _TOKEN_RE = re.compile(r"[\wа-яА-ЯёЁ]+", re.UNICODE)
+_ACTIONABLE_STATUSES = {"memory_fail", "memory_warn"}
+_ACTIONABLE_COMMENT_KINDS = {"actionable_feedback"}
 
 
 def _write_jsonl(rows: list[dict[str, Any]], path: Path) -> None:
@@ -227,12 +229,35 @@ def _memory_candidate_score(artifact: dict[str, Any], row: dict[str, Any]) -> fl
     art_features = _artifact_features(artifact)
     row_features = set((row.get("anchor_before") or {}).get("features") or [])
     feature_score = len(art_features & row_features) / len(row_features) if row_features else 0.0
-    text_score = text_similarity(_artifact_text(artifact), str((row.get("local_context") or {}).get("before_text") or ""))
+    artifact_text = _artifact_text(artifact)
+    text_score = text_similarity(artifact_text, str((row.get("local_context") or {}).get("before_text") or ""))
+    comment_score = text_similarity(artifact_text, str(row.get("comment_text") or ""))
     section_path = " ".join(str(x).lower() for x in (row.get("section_path") or []))
     section = str(artifact.get("section_name") or "").lower()
     section_score = 1.0 if section and section in section_path else 0.0
     kind_bonus = 0.10 if row.get("comment_kind") in {"actionable_feedback", "criterion_success", "non_criterion_praise"} else 0.0
-    return round(0.50 * feature_score + 0.30 * text_score + 0.10 * section_score + kind_bonus, 4)
+    actionable_bonus = 0.06 if row.get("comment_kind") == "actionable_feedback" else 0.0
+    if str(row.get("alert_color") or "") == "danger":
+        actionable_bonus += 0.04
+    base_score = 0.50 * feature_score + 0.30 * text_score + 0.10 * section_score + kind_bonus
+    return round(min(1.0, base_score + 0.10 * comment_score + actionable_bonus), 4)
+
+
+def _is_actionable_memory_candidate(item: dict[str, Any]) -> bool:
+    return (
+        str(item.get("comment_kind") or "") in _ACTIONABLE_COMMENT_KINDS
+        or str(item.get("status") or "") in _ACTIONABLE_STATUSES
+        or str(item.get("alert_color") or "") in {"danger", "warning"}
+    )
+
+
+def _memory_candidate_selection_score(item: dict[str, Any]) -> float:
+    score = float(item.get("confidence") or 0.0)
+    if _is_actionable_memory_candidate(item):
+        score += 0.08
+    if str(item.get("alert_color") or "") == "danger":
+        score += 0.04
+    return min(1.0, score)
 
 
 def _best_memory_anchor(artifacts: list[dict[str, Any]], row: dict[str, Any]) -> tuple[int | None, float]:
@@ -317,27 +342,69 @@ def generate_first_iteration_memory_candidates(
     min_score: float = 0.35,
     max_candidates: int = 40,
     max_per_criterion_kind: int = 4,
+    actionable_min_score: float | None = None,
+    max_actionable_candidates: int = 20,
 ) -> list[dict[str, Any]]:
+    actionable_threshold = (
+        actionable_min_score
+        if actionable_min_score is not None
+        else min(float(min_score), max(0.35, float(min_score) - 0.20))
+    )
     candidates = generate_all_first_iteration_memory_candidates(
         artifacts=artifacts,
         memory_rows=memory_rows,
         project=project,
         exclude_reviewed_notebook=exclude_reviewed_notebook,
-        min_score=min_score,
+        min_score=min(float(min_score), float(actionable_threshold)),
     )
     picked: list[dict[str, Any]] = []
     per_group: Counter[tuple[str, str]] = Counter()
     seen_text_anchor: set[tuple[str, int]] = set()
-    for item in candidates:
+    actionable_picked = 0
+
+    def can_pick(item: dict[str, Any]) -> bool:
+        score = float(item.get("confidence") or 0.0)
+        if _is_actionable_memory_candidate(item):
+            return score >= float(actionable_threshold)
+        return score >= float(min_score)
+
+    def pick(item: dict[str, Any]) -> bool:
+        nonlocal actionable_picked
+        is_actionable = _is_actionable_memory_candidate(item)
+        if is_actionable and actionable_picked >= max_actionable_candidates:
+            return False
         key = (str(item.get("criterion_code") or ""), str(item.get("comment_kind") or item.get("status") or ""))
         if per_group[key] >= max_per_criterion_kind:
-            continue
+            return False
         text_key = (plain_text(str(item.get("comment_text") or "")).lower(), int(item.get("anchor_position_idx") or 0))
         if text_key in seen_text_anchor:
-            continue
+            return False
         seen_text_anchor.add(text_key)
         per_group[key] += 1
         picked.append(item)
+        if is_actionable:
+            actionable_picked += 1
+        return True
+
+    actionable_candidates = sorted(
+        [item for item in candidates if _is_actionable_memory_candidate(item) and can_pick(item)],
+        key=lambda item: (
+            -_memory_candidate_selection_score(item),
+            str(item.get("criterion_code") or ""),
+            int(item.get("anchor_position_idx") or 0),
+        ),
+    )
+    for item in actionable_candidates:
+        if actionable_picked >= max_actionable_candidates:
+            break
+        pick(item)
+        if len(picked) >= max_candidates:
+            return picked
+
+    for item in candidates:
+        if not can_pick(item):
+            continue
+        pick(item)
         if len(picked) >= max_candidates:
             break
     return picked
@@ -791,6 +858,8 @@ def run_offline_autoreview(
     include_memory_candidates: bool = True,
     memory_candidate_min_score: float = 0.35,
     max_memory_candidates: int = 30,
+    memory_actionable_min_score: float | None = None,
+    max_actionable_memory_candidates: int = 20,
     enable_llm_judge: bool = False,
     enable_llm_generator: bool = False,
     enable_llm_classifier: bool = False,
@@ -895,6 +964,8 @@ def run_offline_autoreview(
             exclude_reviewed_notebook=exclude_reviewed_notebook,
             min_score=memory_candidate_min_score,
             max_candidates=max_memory_candidates,
+            actionable_min_score=memory_actionable_min_score,
+            max_actionable_candidates=max_actionable_memory_candidates,
         )
         memory_candidates = apply_llm_judge_generator(
             memory_candidates,
@@ -1100,6 +1171,8 @@ def evaluate_first_iteration(
     include_memory_candidates: bool = True,
     memory_candidate_min_score: float = 0.35,
     max_memory_candidates: int = 30,
+    memory_actionable_min_score: float | None = None,
+    max_actionable_memory_candidates: int = 20,
     enable_llm_judge: bool = False,
     enable_llm_generator: bool = False,
     enable_llm_classifier: bool = False,
@@ -1129,6 +1202,8 @@ def evaluate_first_iteration(
         include_memory_candidates=include_memory_candidates,
         memory_candidate_min_score=memory_candidate_min_score,
         max_memory_candidates=max_memory_candidates,
+        memory_actionable_min_score=memory_actionable_min_score,
+        max_actionable_memory_candidates=max_actionable_memory_candidates,
         enable_llm_judge=enable_llm_judge,
         enable_llm_generator=enable_llm_generator,
         enable_llm_classifier=enable_llm_classifier,

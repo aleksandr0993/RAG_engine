@@ -37,6 +37,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--memory-candidate-min-score", type=float, default=0.35)
     parser.add_argument("--max-memory-candidates", type=int, default=30)
+    parser.add_argument(
+        "--memory-actionable-min-score",
+        type=float,
+        default=None,
+        help="Optional lower threshold for actionable reviewer-memory candidates. Defaults to min_score - 0.20, floored at 0.35.",
+    )
+    parser.add_argument(
+        "--max-actionable-memory-candidates",
+        type=int,
+        default=20,
+        help="Reserve up to this many selected reviewer-memory candidates for actionable feedback.",
+    )
     parser.add_argument("--enable-llm-judge", action="store_true", help="Use LLM to keep/drop selected memory candidates.")
     parser.add_argument("--enable-llm-generator", action="store_true", help="Use LLM to adapt selected memory comments.")
     parser.add_argument(
@@ -96,6 +108,8 @@ def main() -> None:
         include_memory_candidates=not args.no_memory_candidates,
         memory_candidate_min_score=args.memory_candidate_min_score,
         max_memory_candidates=args.max_memory_candidates,
+        memory_actionable_min_score=args.memory_actionable_min_score,
+        max_actionable_memory_candidates=args.max_actionable_memory_candidates,
         enable_llm_judge=args.enable_llm_judge,
         enable_llm_generator=args.enable_llm_generator,
         enable_llm_classifier=args.enable_llm_classifier,

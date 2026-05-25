@@ -151,6 +151,56 @@ def test_generate_first_iteration_memory_candidates_uses_success_and_praise_rows
     assert rows[0]["metadata"]["source_stage"] == "memory_retrieval"
 
 
+def test_generate_first_iteration_memory_candidates_reserves_actionable_rows_below_general_threshold():
+    artifacts = [
+        {
+            "artifact_type": "code_cell",
+            "position_idx": 7,
+            "normalized_text": "df['user_score'].unique()\ndf['user_score'] = pd.to_numeric(df['user_score'], errors='coerce')",
+            "metadata_json": {},
+        }
+    ]
+    memory_rows = [
+        {
+            "example_id": "needs-type-analysis",
+            "project_type": "python_preprocessing",
+            "review_iteration": 1,
+            "reviewed_notebook": "other.ipynb",
+            "comment_kind": "actionable_feedback",
+            "alert_color": "danger",
+            "criterion_code": "games_scores_numeric_conversion",
+            "comment_text": "Перед обработкой типов данных посмотри уникальные значения и причины некорректных типов.",
+            "anchor_before": {"features": ["user_score", "unique"]},
+            "local_context": {"before_text": "df['user_score'].unique()"},
+        },
+        {
+            "example_id": "generic-success",
+            "project_type": "python_preprocessing",
+            "review_iteration": 1,
+            "reviewed_notebook": "other.ipynb",
+            "comment_kind": "criterion_success",
+            "alert_color": "success",
+            "criterion_code": "games_columns_snake_case",
+            "comment_text": "Все отлично, названия столбцов приведены к snake_case.",
+            "anchor_before": {"features": ["columns", "lower"]},
+            "local_context": {"before_text": "df.columns = df.columns.str.lower()"},
+        },
+    ]
+
+    rows = generate_first_iteration_memory_candidates(
+        artifacts=artifacts,
+        memory_rows=memory_rows,
+        project="python_preprocessing",
+        min_score=0.9,
+        actionable_min_score=0.5,
+        max_actionable_candidates=2,
+    )
+
+    assert [row["metadata"]["memory_example_id"] for row in rows] == ["needs-type-analysis"]
+    assert rows[0]["status"] == "memory_fail"
+    assert rows[0]["comment_kind"] == "actionable_feedback"
+
+
 def test_label_memory_candidates_for_auc_marks_tp_fp_and_scores_auc():
     gold = [
         {
