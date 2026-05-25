@@ -61,6 +61,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use LLM to validate that selected memory comments belong near their proposed anchors.",
     )
+    parser.add_argument(
+        "--llm-judge-filter-mode",
+        default="balanced",
+        choices=["off", "balanced", "aggressive"],
+        help="Offline-only deterministic gate applied after LLM judge for memory candidates.",
+    )
     parser.add_argument("--llm-max-candidates", type=int, default=30, help="Maximum selected memory candidates sent to LLM.")
     parser.add_argument("--enable-notebook-memory", action="store_true", help="Build one notebook-wide LLM memory before judge/generator calls.")
     parser.add_argument("--notebook-memory-model", default=None, help="Optional model override for notebook memory.")
@@ -114,6 +120,7 @@ def main() -> None:
         enable_llm_generator=args.enable_llm_generator,
         enable_llm_classifier=args.enable_llm_classifier,
         enable_llm_anchor_validator=args.enable_llm_anchor_validator,
+        llm_judge_filter_mode=args.llm_judge_filter_mode,
         llm_max_candidates=args.llm_max_candidates,
         decision_threshold=args.decision_threshold,
         candidate_score_field=args.candidate_score_field,

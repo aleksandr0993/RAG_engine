@@ -9,6 +9,7 @@ import nbformat
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
 from app.evaluation.first_iteration_autoreview import (
+    apply_llm_judge_calibration,
     apply_llm_judge_generator,
     compare_predictions,
     evaluate_first_iteration,
@@ -357,6 +358,116 @@ def test_apply_llm_judge_generator_accepts_structured_judge_schema():
     assert "intro is absent" in fake_llm.messages[0]["content"]
 
 
+def test_llm_judge_calibration_balanced_filters_weak_support_and_keeps_medium_support():
+    artifacts = [
+        {
+            "artifact_type": "code_cell",
+            "position_idx": 1,
+            "normalized_text": "df['user_score'].unique()\npd.to_numeric(df['user_score'], errors='coerce')",
+            "metadata_json": {},
+        },
+        {
+            "artifact_type": "code_cell",
+            "position_idx": 2,
+            "normalized_text": "df['user_score'].unique()\npd.to_numeric(df['user_score'], errors='coerce')",
+            "metadata_json": {},
+        }
+    ]
+    base = {
+        "criterion_code": "games_scores_numeric_conversion",
+        "status": "memory_fail",
+        "confidence": 0.9,
+        "keep_score": 0.9,
+        "anchor_position_idx": 1,
+        "alert_color": "danger",
+        "comment_kind": "actionable_feedback",
+        "comment_text": "Проверь user_score unique перед pd.to_numeric errors coerce.",
+        "metadata": {
+            "source_stage": "llm",
+            "llm_judge_used": True,
+            "llm_judge_keep": True,
+            "llm_anchor_ok": True,
+            "llm_criterion_ok": True,
+            "llm_style_match_score": 0.8,
+        },
+    }
+    weak = dict(base)
+    weak["metadata"] = {**base["metadata"], "llm_source_support": "weak"}
+    medium = dict(base)
+    medium["anchor_position_idx"] = 2
+    medium["metadata"] = {**base["metadata"], "llm_source_support": "medium"}
+
+    out = apply_llm_judge_calibration([weak, medium], artifacts=artifacts, filter_mode="balanced")
+
+    assert out[0]["calibration_decision"] is False
+    assert "insufficient_source_support" in out[0]["calibration_reasons"]
+    assert out[1]["calibration_decision"] is True
+    assert out[1]["calibrated_keep_score"] >= 0.75
+
+
+def test_llm_judge_calibration_penalizes_duplicates_and_off_preserves_legacy():
+    artifacts = [
+        {
+            "artifact_type": "code_cell",
+            "position_idx": 1,
+            "normalized_text": "df.columns = df.columns.str.lower()",
+            "metadata_json": {},
+        }
+    ]
+    candidate = {
+        "criterion_code": "games_columns_snake_case",
+        "status": "memory_success",
+        "confidence": 0.92,
+        "keep_score": 0.92,
+        "anchor_position_idx": 1,
+        "alert_color": "success",
+        "comment_kind": "criterion_success",
+        "comment_text": "Названия columns приведены к lower snake_case.",
+        "metadata": {
+            "source_stage": "llm",
+            "llm_judge_used": True,
+            "llm_judge_keep": True,
+            "llm_anchor_ok": True,
+            "llm_criterion_ok": True,
+            "llm_source_support": "strong",
+            "llm_style_match_score": 0.9,
+        },
+    }
+
+    out = apply_llm_judge_calibration([candidate, dict(candidate)], artifacts=artifacts, filter_mode="balanced")
+    assert out[0]["calibrated_keep_score"] > out[1]["calibrated_keep_score"]
+    assert "same_criterion_anchor_duplicate" in out[1]["calibration_reasons"]
+
+    legacy = apply_llm_judge_calibration([candidate], artifacts=artifacts, filter_mode="off")
+    assert "calibration_decision" not in legacy[0]
+    assert legacy[0]["metadata"]["calibration_status"] == "off"
+
+
+def test_llm_judge_calibration_unavailable_llm_keeps_legacy_candidate():
+    class UnavailableLLM:
+        is_available = False
+
+    candidates = [
+        {
+            "criterion_code": "games_initial_overview",
+            "status": "memory_warn",
+            "confidence": 0.8,
+            "anchor_position_idx": 1,
+            "alert_color": "warning",
+            "comment_text": "Добавь вывод",
+            "metadata": {"source_stage": "memory_retrieval"},
+        }
+    ]
+    artifacts = [{"artifact_type": "code_cell", "position_idx": 1, "normalized_text": "df.info()", "metadata_json": {}}]
+
+    judged = apply_llm_judge_generator(candidates, artifacts=artifacts, llm_service=UnavailableLLM(), enable_judge=True)
+    out = apply_llm_judge_calibration(judged, artifacts=artifacts, filter_mode="balanced")
+
+    assert out[0]["metadata"]["llm_skipped"] == "llm_unavailable"
+    assert out[0]["calibration_decision"] is True
+    assert out[0]["metadata"]["calibration_status"] == "skipped_no_llm_judge"
+
+
 def test_apply_llm_classifier_and_anchor_validator_updates_and_filters_candidates():
     class FakeLLM:
         is_available = True
@@ -543,6 +654,76 @@ def test_evaluate_first_iteration_quality_judge_adds_artifact_block(tmp_path: Pa
     assert "Quality Metrics" in (tmp_path / "quality_eval" / "report.md").read_text(encoding="utf-8")
 
 
+def test_evaluate_first_iteration_llm_judge_calibration_writes_artifacts(tmp_path: Path):
+    class FakeJudgeLLM:
+        is_available = True
+
+        def chat(self, messages, temperature=0.2):
+            return LLMCallResult(
+                ok=True,
+                text=(
+                    '{"keep_score": 0.91, "keep_decision": true, "anchor_ok": true, '
+                    '"criterion_ok": true, "source_support": "weak", "style_match_score": 0.8, '
+                    '"evidence_quote": "", "fp_risk": "high", "drop_reason": "weak evidence", "reason": "too generic"}'
+                ),
+            )
+
+    restored = tmp_path / "restored.ipynb"
+    reviewed = tmp_path / "reviewed.ipynb"
+    _write_nb(restored, [new_code_cell("df.columns = df.columns.str.lower()")])
+    _write_nb(
+        reviewed,
+        [
+            new_code_cell("df.columns = df.columns.str.lower()"),
+            new_markdown_cell(_review_comment("Комментарий ревьюера", "Названия столбцов приведены к snake_case")),
+        ],
+    )
+    memory = tmp_path / "memory.jsonl"
+    memory.write_text(
+        json.dumps(
+            {
+                "example_id": "ok-columns",
+                "project_type": "python_preprocessing",
+                "review_iteration": 1,
+                "reviewed_notebook": "other.ipynb",
+                "comment_kind": "criterion_success",
+                "alert_color": "success",
+                "criterion_code": "games_columns_snake_case",
+                "comment_text": "Комментарий ревьюера Названия столбцов приведены к snake_case",
+                "anchor_before": {"features": ["columns", "lower"]},
+                "local_context": {"before_text": "df.columns = df.columns.str.lower()"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = evaluate_first_iteration(
+        reviewed_notebook=reviewed,
+        restored_notebook=restored,
+        project="python_preprocessing",
+        criteria_map="notebook_games_preprocessing_v1",
+        out_dir=tmp_path / "judge_eval",
+        reviewer_insertions_path=memory,
+        memory_candidate_min_score=0.1,
+        enable_llm_judge=True,
+        llm_judge_filter_mode="balanced",
+        llm_service=FakeJudgeLLM(),
+        candidate_score_field="calibrated_keep_score",
+    )
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "judge_eval" / "all_memory_candidates_labeled.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert any(row.get("calibrated_keep_score") is not None for row in rows)
+    assert any(row.get("calibration_decision") is False for row in rows)
+    assert payload["candidate_auc"]["score_field"] == "calibrated_keep_score"
+    assert "by_calibration_decision" in payload["candidate_auc"]["breakdowns"]
+
+
 def test_evaluate_first_iteration_cli(tmp_path: Path):
     repo = Path(__file__).resolve().parents[1]
     restored = tmp_path / "restored.ipynb"
@@ -634,6 +815,8 @@ def test_build_first_iteration_candidate_dataset_cli_selects_val_threshold(tmp_p
             str(tmp_path / "dataset"),
             "--memory-candidate-min-score",
             "0.1",
+            "--llm-judge-filter-mode",
+            "off",
         ],
         cwd=repo,
         check=True,

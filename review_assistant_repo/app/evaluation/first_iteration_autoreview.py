@@ -39,6 +39,12 @@ _EXPLICIT_REVIEW_VERSION_RE = re.compile(r"Комментарий\s+ревьюе
 _TOKEN_RE = re.compile(r"[\wа-яА-ЯёЁ]+", re.UNICODE)
 _ACTIONABLE_STATUSES = {"memory_fail", "memory_warn"}
 _ACTIONABLE_COMMENT_KINDS = {"actionable_feedback"}
+_LLM_JUDGE_FILTER_MODES = {"off", "balanced", "aggressive"}
+_SOURCE_SUPPORT_RANK = {"none": 0, "weak": 1, "medium": 2, "strong": 3}
+_GENERIC_REVIEW_RE = re.compile(
+    r"\b(молодец|отлично|хорошо|всё отлично|все отлично|стоит улучшить|добавь вывод|проверь)\b",
+    re.IGNORECASE,
+)
 
 
 def _write_jsonl(rows: list[dict[str, Any]], path: Path) -> None:
@@ -96,6 +102,22 @@ def _bool_from_json(value: Any, *, default: bool = True) -> bool:
         if normalized in {"false", "no", "0", "нет"}:
             return False
     return default
+
+
+def _float01(value: Any, *, default: float = 0.0) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _source_support(value: Any) -> str:
+    support = str(value or "").strip().lower()
+    return support if support in _SOURCE_SUPPORT_RANK else "none"
+
+
+def _support_at_least(value: Any, minimum: str) -> bool:
+    return _SOURCE_SUPPORT_RANK[_source_support(value)] >= _SOURCE_SUPPORT_RANK[minimum]
 
 
 def _alert_from_level(level: str) -> str:
@@ -208,7 +230,14 @@ def _anchor_context(artifacts: list[dict[str, Any]], anchor_idx: int | None) -> 
         [a for a in artifacts if a.get("position_idx") is not None],
         key=lambda item: int(item.get("position_idx") or 0),
     )
-    current_pos = next((i for i, item in enumerate(ordered) if int(item.get("position_idx") or -1) == int(anchor_idx)), None)
+    current_pos = next(
+        (
+            i
+            for i, item in enumerate(ordered)
+            if item.get("position_idx") is not None and int(item.get("position_idx")) == int(anchor_idx)
+        ),
+        None,
+    )
     if current_pos is None:
         return {}
     return {
@@ -446,6 +475,8 @@ def _candidate_keep_score(row: dict[str, Any], *, score_field: str | None = None
         value = row.get(score_field)
         if value is not None:
             return max(0.0, min(1.0, float(value)))
+        if score_field == "calibrated_keep_score":
+            return 0.0
     meta = row.get("metadata") or {}
     for key in ("keep_score", "llm_keep_score", "llm_judge_keep_score"):
         value = row.get(key, meta.get(key))
@@ -506,6 +537,7 @@ def _candidate_breakdowns(labeled: list[dict[str, Any]], *, decision_threshold: 
         "by_status": lambda row: str(row.get("status") or "unknown"),
         "by_source_stage": lambda row: str((row.get("metadata") or {}).get("source_stage") or "unknown"),
         "by_comment_kind": lambda row: str(row.get("comment_kind") or "unknown"),
+        "by_calibration_decision": lambda row: str(row.get("calibration_decision") if row.get("calibration_decision") is not None else "unknown"),
     }
     out: dict[str, Any] = {}
     for name, key_fn in specs.items():
@@ -583,6 +615,205 @@ def label_memory_candidates_for_auc(
         "breakdowns": _candidate_breakdowns(labeled, decision_threshold=decision_threshold),
     }
     return labeled, summary
+
+
+def _candidate_identity(row: dict[str, Any]) -> tuple[str, int, str]:
+    meta = row.get("metadata") or {}
+    memory_id = str(meta.get("memory_example_id") or row.get("memory_example_id") or "")
+    return (
+        memory_id or plain_text(str(row.get("comment_text") or "")).lower(),
+        int(row.get("anchor_position_idx") or 0),
+        str(row.get("criterion_code") or ""),
+    )
+
+
+def _anchor_text_similarity(candidate: dict[str, Any], artifacts: list[dict[str, Any]]) -> float:
+    anchor_ctx = _anchor_context(artifacts, candidate.get("anchor_position_idx"))
+    cells = anchor_ctx.get("cells") if isinstance(anchor_ctx, dict) else []
+    if not isinstance(cells, list):
+        cells = []
+    context_text = " ".join(str(cell.get("text") or "") for cell in cells if isinstance(cell, dict))
+    return text_similarity(str(candidate.get("comment_text") or ""), context_text)
+
+
+def _is_generic_review_text(text: str) -> bool:
+    tokens = _tokens(plain_text(text))
+    if len(tokens) <= 6:
+        return True
+    return bool(_GENERIC_REVIEW_RE.search(text)) and len(tokens) <= 14
+
+
+def _calibrate_candidate(
+    candidate: dict[str, Any],
+    *,
+    artifacts: list[dict[str, Any]],
+    duplicate_rank: int = 0,
+    filter_mode: str = "balanced",
+) -> dict[str, Any]:
+    if filter_mode not in _LLM_JUDGE_FILTER_MODES:
+        raise ValueError(f"unsupported llm judge filter mode: {filter_mode}")
+
+    updated = dict(candidate)
+    meta = dict(updated.get("metadata") or {})
+    if filter_mode == "off":
+        meta["calibration_status"] = "off"
+        updated["metadata"] = meta
+        return updated
+    if meta.get("llm_skipped") or not meta.get("llm_judge_used"):
+        score = _candidate_keep_score(updated)
+        updated["calibrated_keep_score"] = score
+        updated["calibration_decision"] = True
+        meta["calibration_status"] = "skipped_no_llm_judge"
+        meta["calibrated_keep_score"] = score
+        meta["calibration_decision"] = True
+        updated["metadata"] = meta
+        return updated
+
+    reasons: list[str] = []
+    support = _source_support(meta.get("llm_source_support"))
+    llm_keep = _bool_from_json(meta.get("llm_judge_keep"), default=True)
+    anchor_ok = _bool_from_json(meta.get("llm_anchor_ok"), default=True)
+    criterion_ok = _bool_from_json(meta.get("llm_criterion_ok"), default=True)
+    style_score = _float01(meta.get("llm_style_match_score"), default=0.7)
+    anchor_similarity = _anchor_text_similarity(updated, artifacts)
+    score = _candidate_keep_score(updated)
+
+    if support == "strong":
+        score += 0.08
+        reasons.append("strong_support_bonus")
+    elif support == "medium":
+        score += 0.02
+    elif support == "weak":
+        score -= 0.18
+        reasons.append("weak_support_penalty")
+    else:
+        score -= 0.30
+        reasons.append("missing_support_penalty")
+
+    if not llm_keep:
+        score -= 0.50
+        reasons.append("llm_drop")
+    if not anchor_ok:
+        score -= 0.50
+        reasons.append("bad_anchor")
+    if not criterion_ok:
+        score -= 0.50
+        reasons.append("bad_criterion")
+    if style_score < 0.5:
+        score -= 0.10
+        reasons.append("low_style_match")
+    elif style_score < 0.7:
+        score -= 0.04
+        reasons.append("medium_style_match")
+    if _is_generic_review_text(str(updated.get("comment_text") or "")):
+        score -= 0.08
+        reasons.append("generic_comment")
+    if anchor_similarity < 0.03:
+        score -= 0.12
+        reasons.append("low_anchor_context_overlap")
+    elif anchor_similarity < 0.08:
+        score -= 0.05
+        reasons.append("medium_anchor_context_overlap")
+    if duplicate_rank > 0:
+        score -= 0.25 if duplicate_rank == 1 else 0.35
+        reasons.append("same_criterion_anchor_duplicate")
+    if _is_actionable_memory_candidate(updated) and support in {"medium", "strong"} and anchor_similarity >= 0.08:
+        score += 0.06
+        reasons.append("actionable_evidence_bonus")
+
+    calibrated = round(max(0.0, min(1.0, score)), 4)
+    threshold = 0.85 if filter_mode == "aggressive" else 0.75
+    support_ok = _support_at_least(support, "medium")
+    if filter_mode == "aggressive" and _is_actionable_memory_candidate(updated):
+        support_ok = support == "strong"
+    decision = bool(llm_keep and anchor_ok and criterion_ok and support_ok and calibrated >= threshold)
+    if not support_ok:
+        reasons.append("insufficient_source_support")
+    if calibrated < threshold:
+        reasons.append("below_calibrated_threshold")
+
+    updated["calibrated_keep_score"] = calibrated
+    updated["calibration_decision"] = decision
+    updated["calibration_reasons"] = reasons
+    meta["calibration_status"] = "ok"
+    meta["calibration_filter_mode"] = filter_mode
+    meta["calibrated_keep_score"] = calibrated
+    meta["calibration_decision"] = decision
+    meta["calibration_reasons"] = reasons
+    meta["calibration_anchor_context_similarity"] = anchor_similarity
+    meta["calibration_duplicate_rank"] = duplicate_rank
+    updated["metadata"] = meta
+    return updated
+
+
+def apply_llm_judge_calibration(
+    candidates: list[dict[str, Any]],
+    *,
+    artifacts: list[dict[str, Any]],
+    filter_mode: str = "balanced",
+) -> list[dict[str, Any]]:
+    if filter_mode not in _LLM_JUDGE_FILTER_MODES:
+        raise ValueError(f"unsupported llm judge filter mode: {filter_mode}")
+    if filter_mode == "off":
+        return [_calibrate_candidate(candidate, artifacts=artifacts, filter_mode=filter_mode) for candidate in candidates]
+
+    group_counts: Counter[tuple[str, int]] = Counter()
+    ranked = sorted(
+        range(len(candidates)),
+        key=lambda idx: (
+            -_candidate_keep_score(candidates[idx]),
+            -float(candidates[idx].get("confidence") or 0.0),
+            str(candidates[idx].get("criterion_code") or ""),
+            int(candidates[idx].get("anchor_position_idx") or 0),
+        ),
+    )
+    duplicate_rank_by_index: dict[int, int] = {}
+    for idx in ranked:
+        candidate = candidates[idx]
+        key = (str(candidate.get("criterion_code") or ""), int(candidate.get("anchor_position_idx") or 0))
+        duplicate_rank_by_index[idx] = group_counts[key]
+        group_counts[key] += 1
+
+    return [
+        _calibrate_candidate(
+            candidate,
+            artifacts=artifacts,
+            duplicate_rank=duplicate_rank_by_index.get(idx, 0),
+            filter_mode=filter_mode,
+        )
+        for idx, candidate in enumerate(candidates)
+    ]
+
+
+def _merge_selected_candidate_fields(
+    all_candidates: list[dict[str, Any]],
+    selected_candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_identity = {_candidate_identity(candidate): candidate for candidate in selected_candidates}
+    merged: list[dict[str, Any]] = []
+    copied_fields = (
+        "keep_score",
+        "calibrated_keep_score",
+        "calibration_decision",
+        "calibration_reasons",
+        "comment_kind",
+        "alert_color",
+        "status",
+    )
+    for candidate in all_candidates:
+        selected = by_identity.get(_candidate_identity(candidate))
+        if selected is None:
+            merged.append(candidate)
+            continue
+        updated = dict(candidate)
+        for field in copied_fields:
+            if field in selected:
+                updated[field] = selected[field]
+        updated_meta = dict(updated.get("metadata") or {})
+        updated_meta.update(dict(selected.get("metadata") or {}))
+        updated["metadata"] = updated_meta
+        merged.append(updated)
+    return merged
 
 
 def apply_llm_judge_generator(
@@ -717,9 +948,15 @@ def apply_llm_judge_generator(
                 '"criterion_ok": true|false, '
                 '"source_support": "strong|medium|weak|none", '
                 '"style_match_score": 0..1, '
+                '"evidence_quote": "...", '
+                '"fp_risk": "low|medium|high", '
+                '"drop_reason": "...", '
                 '"reason": "..."}.\n'
                 "Для обратной совместимости допустимы старые поля keep/confidence/rationale, но предпочтительны новые.\n"
-                "Оставляй комментарий только если он конкретно относится к anchor_context и не является лишним дублем.\n"
+                "Оставляй комментарий только если он конкретно подтверждается текущими anchor_context/project_memory, "
+                "не является лишним дублем, не generic и не описывает проблему, которую студент уже исправил. "
+                "Похожесть на прошлое ревью сама по себе не является evidence. Если нет короткой цитаты evidence "
+                "из текущей тетрадки, ставь source_support weak или none.\n"
                 f"Данные:\n{json.dumps(judge_context, ensure_ascii=False)[:12000]}"
             )
             result = llm.chat([{"role": "user", "content": prompt}], temperature=0.1)
@@ -752,6 +989,13 @@ def apply_llm_judge_generator(
                         meta["llm_source_support"] = source_support
                     if parsed.get("style_match_score") is not None:
                         meta["llm_style_match_score"] = max(0.0, min(1.0, float(parsed.get("style_match_score") or 0.0)))
+                    meta["llm_evidence_quote"] = str(parsed.get("evidence_quote") or "")[:500]
+                    fp_risk = str(parsed.get("fp_risk") or "").strip().lower()
+                    if fp_risk in {"low", "medium", "high"}:
+                        meta["llm_fp_risk"] = fp_risk
+                    drop_reason = str(parsed.get("drop_reason") or "").strip()
+                    if drop_reason:
+                        meta["llm_drop_reason"] = drop_reason[:500]
                     meta["llm_judge_confidence"] = parsed.get("confidence")
                     meta["llm_judge_rationale"] = str(parsed.get("reason") or parsed.get("rationale") or "")[:500]
                 else:
@@ -864,9 +1108,12 @@ def run_offline_autoreview(
     enable_llm_generator: bool = False,
     enable_llm_classifier: bool = False,
     enable_llm_anchor_validator: bool = False,
+    llm_judge_filter_mode: str = "balanced",
     llm_max_candidates: int = 30,
     llm_service: LLMService | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]], dict[str, Any] | None, list[dict[str, Any]]]:
+    if llm_judge_filter_mode not in _LLM_JUDGE_FILTER_MODES:
+        raise ValueError(f"unsupported llm judge filter mode: {llm_judge_filter_mode}")
     criteria = load_criteria_map(criteria_map)
     artifacts, notebook_obj = _parse_artifacts(restored_notebook)
     settings = get_settings()
@@ -978,6 +1225,13 @@ def run_offline_autoreview(
             enable_anchor_validator=enable_llm_anchor_validator,
             max_candidates=llm_max_candidates,
         )
+        if enable_llm_judge:
+            memory_candidates = apply_llm_judge_calibration(
+                memory_candidates,
+                artifacts=artifacts,
+                filter_mode=llm_judge_filter_mode,
+            )
+            all_memory_candidates = _merge_selected_candidate_fields(all_memory_candidates, memory_candidates)
         existing = {
             (str(item.get("criterion_code") or ""), int(item.get("anchor_position_idx") or 0), str(item.get("comment_text") or ""))
             for item in predicted
@@ -985,6 +1239,8 @@ def run_offline_autoreview(
         for item in memory_candidates:
             meta = item.get("metadata") or {}
             if meta.get("llm_judge_keep") is False or meta.get("llm_anchor_valid") is False:
+                continue
+            if item.get("calibration_decision") is False:
                 continue
             key = (str(item.get("criterion_code") or ""), int(item.get("anchor_position_idx") or 0), str(item.get("comment_text") or ""))
             if key in existing:
@@ -1077,6 +1333,9 @@ def compare_predictions(predicted: list[dict[str, Any]], gold: list[dict[str, An
             "predicted_source_stage_counts": dict(
                 Counter((p.get("metadata") or {}).get("source_stage") or "unknown" for p in predicted)
             ),
+            "predicted_calibration_decision_counts": dict(
+                Counter(str(p.get("calibration_decision") if p.get("calibration_decision") is not None else "unknown") for p in predicted)
+            ),
         },
         "matches": matches,
         "missed_gold": missed,
@@ -1109,6 +1368,7 @@ def render_report(payload: dict[str, Any]) -> str:
         f"- Gold kinds: {json.dumps(s['gold_comment_kind_counts'], ensure_ascii=False)}",
         f"- Predicted statuses: {json.dumps(s['predicted_status_counts'], ensure_ascii=False)}",
         f"- Predicted source stages: {json.dumps(s.get('predicted_source_stage_counts', {}), ensure_ascii=False)}",
+        f"- Predicted calibration decisions: {json.dumps(s.get('predicted_calibration_decision_counts', {}), ensure_ascii=False)}",
         f"- Memory candidate ROC-AUC: {auc.get('roc_auc')}",
         f"- Memory candidate PR-AUC/AP: {auc.get('pr_auc_average_precision')}",
         f"- Memory candidate F1 @ {at_threshold.get('threshold')}: {at_threshold.get('f1')} "
@@ -1123,6 +1383,7 @@ def render_report(payload: dict[str, Any]) -> str:
         ("Source stage", "by_source_stage"),
         ("Comment kind", "by_comment_kind"),
         ("Status", "by_status"),
+        ("Calibration decision", "by_calibration_decision"),
     ]:
         rows = breakdowns.get(key) or {}
         lines.extend([f"### {title}", "", "| Bucket | Total | Pos | Neg | ROC-AUC | F1 |", "|---|---:|---:|---:|---:|---:|"])
@@ -1177,6 +1438,7 @@ def evaluate_first_iteration(
     enable_llm_generator: bool = False,
     enable_llm_classifier: bool = False,
     enable_llm_anchor_validator: bool = False,
+    llm_judge_filter_mode: str = "balanced",
     llm_max_candidates: int = 30,
     decision_threshold: float = 0.5,
     candidate_score_field: str | None = None,
@@ -1185,6 +1447,7 @@ def evaluate_first_iteration(
     quality_judge_max_items: int = 100,
     quality_judge_min_source_support: str = "medium",
     quality_score_threshold: float = 0.7,
+    llm_service: LLMService | None = None,
     quality_llm_service: LLMService | None = None,
 ) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1208,7 +1471,9 @@ def evaluate_first_iteration(
         enable_llm_generator=enable_llm_generator,
         enable_llm_classifier=enable_llm_classifier,
         enable_llm_anchor_validator=enable_llm_anchor_validator,
+        llm_judge_filter_mode=llm_judge_filter_mode,
         llm_max_candidates=llm_max_candidates,
+        llm_service=llm_service,
     )
     comparison = compare_predictions(predicted, gold)
     labeled_candidates, candidate_auc_summary = label_memory_candidates_for_auc(
@@ -1247,6 +1512,7 @@ def evaluate_first_iteration(
         "project": project,
         "decision_threshold": decision_threshold,
         "candidate_score_field": candidate_score_field,
+        "llm_judge_filter_mode": llm_judge_filter_mode,
         "artifacts": {
             "gold_jsonl": str(out_dir / "gold_first_review_comments.jsonl"),
             "predicted_jsonl": str(out_dir / "predicted_insertions.jsonl"),
