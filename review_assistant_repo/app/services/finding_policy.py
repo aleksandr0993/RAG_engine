@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from app.analyzers.rule_matching import find_rule_match
+
 # Strict reporting stages (hybrid without LLM is still "semantic" at criterion level).
 SOURCE_STAGES: frozenset[str] = frozenset({"rule", "semantic", "visual", "llm"})
 
@@ -52,6 +54,15 @@ class PolicyOutcome:
     metadata: dict[str, Any]
 
 
+@dataclass
+class EvidenceGateOutcome:
+    status: str
+    confidence: float | None
+    metadata: dict[str, Any]
+    evidence: list[dict[str, Any]]
+    anchor_position_idx: int | None
+
+
 def apply_low_confidence_and_quality_policy(
     *,
     status: str,
@@ -90,6 +101,64 @@ def apply_low_confidence_and_quality_policy(
         meta["manual_review_reasons"] = mr
 
     return PolicyOutcome(status=new_status, confidence=new_conf, metadata=meta)
+
+
+def apply_required_fail_evidence_gate(
+    *,
+    status: str,
+    severity: str,
+    confidence: float | None,
+    metadata: dict[str, Any],
+    criterion: dict[str, Any],
+    artifacts: list[dict[str, Any]],
+    evidence: list[dict[str, Any]] | None,
+    anchor_position_idx: int | None,
+    enabled: bool = True,
+) -> EvidenceGateOutcome:
+    """
+    Prevent required fail from producing a red finding when no concrete evidence was found.
+    Rule criteria get one whole-notebook verification pass before downgrade.
+    """
+    meta = dict(metadata)
+    current_evidence = list(evidence or [])
+    criterion_code = str(criterion.get("code") or meta.get("criterion_code") or "unknown")
+    if not enabled or severity != "required" or status != "fail" or current_evidence:
+        return EvidenceGateOutcome(
+            status=status,
+            confidence=confidence,
+            metadata=meta,
+            evidence=current_evidence,
+            anchor_position_idx=anchor_position_idx,
+        )
+
+    meta["policy_required_fail_without_evidence"] = True
+    meta["manual_review_suggested"] = True
+    reasons = list(meta.get("manual_review_reasons") or [])
+    reason = f"{criterion_code}:required_fail_without_evidence"
+    if reason not in reasons:
+        reasons.append(reason)
+    meta["manual_review_reasons"] = reasons
+
+    if criterion.get("detection_mode", "rule") == "rule":
+        match = find_rule_match(artifacts, criterion)
+        if match is not None:
+            meta["policy_whole_notebook_verification"] = "pass_found"
+            return EvidenceGateOutcome(
+                status="pass",
+                confidence=max(confidence or 0.0, 0.98),
+                metadata=meta,
+                evidence=list(match.get("evidence") or []),
+                anchor_position_idx=match.get("anchor_position_idx"),
+            )
+
+    meta["policy_whole_notebook_verification"] = "no_evidence_downgraded"
+    return EvidenceGateOutcome(
+        status="warn",
+        confidence=confidence,
+        metadata=meta,
+        evidence=current_evidence,
+        anchor_position_idx=anchor_position_idx,
+    )
 
 
 def build_manual_review_summary(merged_results: list[dict[str, Any]]) -> dict[str, Any]:

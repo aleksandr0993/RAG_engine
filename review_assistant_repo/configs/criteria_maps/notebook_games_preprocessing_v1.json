@@ -338,6 +338,61 @@
         "patterns_all": [
           "platform",
           "head(7"
+        ],
+        "acceptable_patterns": [
+          {
+            "patterns_any": [
+              "value_counts",
+              "groupby"
+            ],
+            "patterns_all": [
+              "platform",
+              "head(7"
+            ]
+          },
+          {
+            "patterns_any": [
+              "value_counts",
+              "groupby"
+            ],
+            "patterns_all": [
+              "platform",
+              "nlargest(7"
+            ]
+          },
+          {
+            "patterns_any": [
+              "value_counts",
+              "groupby"
+            ],
+            "patterns_all": [
+              "platform",
+              "sort_values",
+              "head(7"
+            ]
+          },
+          {
+            "patterns_any": [
+              "groupby"
+            ],
+            "patterns_all": [
+              "platform",
+              ".count",
+              "sort_values",
+              "head(7"
+            ]
+          },
+          {
+            "patterns_any": [
+              "groupby"
+            ],
+            "patterns_all": [
+              "platform",
+              ".size",
+              "sort_values",
+              "head(7"
+            ]
+          }
         ]
       },
       "comment_templates": {

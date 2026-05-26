@@ -244,6 +244,34 @@ def test_games_preprocessing_accepts_split_overview_and_groupby_top7(client, tmp
     assert by_code["games_top7_platforms"] == "pass"
 
 
+def test_games_preprocessing_accepts_value_counts_nlargest_top7(client, tmp_path):
+    notebook_path = tmp_path / "games_nlargest_top7.ipynb"
+    _write_games_project_notebook(notebook_path)
+    data = json.loads(notebook_path.read_text(encoding="utf-8"))
+    data["cells"][11]["source"] = [
+        "top_platforms = df_actual['platform'].value_counts().nlargest(7).index\n",
+        "df_top_platforms = df_actual[df_actual['platform'].isin(top_platforms)]\n",
+        "display(df_top_platforms['platform'].value_counts())",
+    ]
+    notebook_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    with notebook_path.open("rb") as f:
+        upload = client.post(
+            "/api/v1/projects/upload",
+            data={"criteria_map_code": "notebook_games_preprocessing_v1"},
+            files={"file": (notebook_path.name, f, "application/x-ipynb+json")},
+        )
+    assert upload.status_code == 200, upload.text
+    project_id = upload.json()["project_id"]
+
+    review = client.post(f"/api/v1/projects/{project_id}/review")
+    assert review.status_code == 200, review.text
+
+    rows = client.get(f"/api/v1/projects/{project_id}/findings").json()
+    by_code = {row["criterion_code"]: row["status"] for row in rows}
+    assert by_code["games_top7_platforms"] == "pass"
+
+
 def test_games_preprocessing_accepts_reviewer_pair_patterns(client, tmp_path):
     notebook_path = tmp_path / "games_pair_patterns.ipynb"
     _write_games_project_notebook(notebook_path)
@@ -287,7 +315,7 @@ def test_games_preprocessing_accepts_reviewer_pair_patterns(client, tmp_path):
     assert by_code["games_missing_values_quantified"] == "pass"
 
 
-def test_reviewer_insertion_memory_places_failed_comment_near_matching_cell(tmp_path, monkeypatch):
+def test_reviewer_insertion_memory_does_not_place_red_comment_for_no_evidence_required_fail(tmp_path, monkeypatch):
     notebook_path = tmp_path / "games_memory_anchor.ipynb"
     _write_games_project_notebook(notebook_path)
     data = json.loads(notebook_path.read_text(encoding="utf-8"))
@@ -340,12 +368,15 @@ def test_reviewer_insertion_memory_places_failed_comment_near_matching_cell(tmp_
 
         review = client.post(f"/api/v1/projects/{project_id}/review")
         assert review.status_code == 200, review.text
-        assert review.json()["final_verdict"] == "revise"
+        assert review.json()["final_verdict"] == "pass"
+
+        rows = client.get(f"/api/v1/projects/{project_id}/findings").json()
+        top7 = next(row for row in rows if row["criterion_code"] == "games_top7_platforms")
+        assert top7["status"] == "warn"
 
         reviewed_resp = client.get(f"/api/v1/projects/{project_id}/export/reviewed_notebook")
         assert reviewed_resp.status_code == 200
 
     reviewed = nbformat.reads(reviewed_resp.content.decode("utf-8"), as_version=4)
     sources = [cell.source for cell in reviewed.cells]
-    target_idx = next(i for i, source in enumerate(sources) if "grouped_data = df_actual.groupby('platform')" in source)
-    assert "Топ-7 платформ" in sources[target_idx + 1] or "топ-7 платформ" in sources[target_idx + 1]
+    assert not any("alert-danger" in source and "Топ-7 платформ" in source for source in sources)

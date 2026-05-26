@@ -26,6 +26,7 @@ from app.services.comment_dedup import dedupe_notebook_insertions
 from app.services.criteria_summary import build_criteria_execution_summary_from_merged
 from app.services.finding_policy import (
     apply_low_confidence_and_quality_policy,
+    apply_required_fail_evidence_gate,
     build_manual_review_summary,
     coerce_source_stage_metadata,
 )
@@ -544,10 +545,25 @@ class ReviewService:
                 min_confidence_for_required_fail=settings.finding_min_confidence_for_required_fail,
                 enabled=settings.finding_policy_enabled,
             )
-            final_status = outcome.status
-            result_meta = outcome.metadata
+            gate = apply_required_fail_evidence_gate(
+                status=outcome.status,
+                severity=severity,
+                confidence=outcome.confidence,
+                metadata=outcome.metadata,
+                criterion=criterion,
+                artifacts=artifact_dicts,
+                evidence=result.get("evidence") or [],
+                anchor_position_idx=result.get("anchor_position_idx"),
+                enabled=settings.finding_policy_enabled,
+            )
+            final_status = gate.status
+            final_confidence = gate.confidence
+            result_meta = gate.metadata
+            result_evidence = gate.evidence
+            result_anchor_position_idx = gate.anchor_position_idx
 
             if final_status == "pass":
+                generated_comment = None
                 positives.append(criterion["title"])
             else:
                 if not fail_text:
@@ -559,9 +575,9 @@ class ReviewService:
                     extra_recommendations.append(fail_text)
 
                 if project.source_type == "ipynb":
-                    anchor_position_idx = result["anchor_position_idx"]
+                    anchor_position_idx = result_anchor_position_idx
                     comment_level = "danger" if severity == "required" and final_status in ("fail", "unknown") else "warning"
-                    if reviewer_insertion_rows and (anchor_position_idx is None or not result.get("evidence")):
+                    if reviewer_insertion_rows and (anchor_position_idx is None or not result_evidence):
                         learned_anchor = choose_insertion_anchor(
                             artifact_dicts,
                             reviewer_insertion_rows,
@@ -594,9 +610,9 @@ class ReviewService:
                 "criterion_code": criterion_code,
                 "severity": severity,
                 "status": final_status,
-                "confidence": result.get("confidence"),
-                "anchor_position_idx": result.get("anchor_position_idx"),
-                "evidence": result.get("evidence", []),
+                "confidence": final_confidence,
+                "anchor_position_idx": result_anchor_position_idx,
+                "evidence": result_evidence,
                 "generated_comment": generated_comment,
                 "metadata": result_meta,
                 "category": criterion.get("category"),
@@ -609,11 +625,11 @@ class ReviewService:
                 criterion_code=criterion_code,
                 severity=severity,
                 status=final_status,
-                confidence=result.get("confidence"),
-                anchor_artifact_id=position_to_db_id.get(int(result["anchor_position_idx"]))
-                if result.get("anchor_position_idx") is not None
+                confidence=final_confidence,
+                anchor_artifact_id=position_to_db_id.get(int(result_anchor_position_idx))
+                if result_anchor_position_idx is not None
                 else None,
-                evidence_json=result.get("evidence", []),
+                evidence_json=result_evidence,
                 generated_comment=generated_comment,
                 metadata_json=result_meta,
             )

@@ -29,6 +29,7 @@ from app.retrieval.reviewer_insertions import (
 from app.services.comment_dedup import dedupe_notebook_insertions
 from app.services.finding_policy import (
     apply_low_confidence_and_quality_policy,
+    apply_required_fail_evidence_gate,
     coerce_source_stage_metadata,
 )
 from app.services.notebook_memory import build_notebook_memory, select_relevant_memory_facts
@@ -1199,16 +1200,27 @@ def run_offline_autoreview(
             min_confidence_for_required_fail=settings.finding_min_confidence_for_required_fail,
             enabled=settings.finding_policy_enabled,
         )
-        final_status = outcome.status
+        gate = apply_required_fail_evidence_gate(
+            status=outcome.status,
+            severity=severity,
+            confidence=outcome.confidence,
+            metadata=outcome.metadata,
+            criterion=criterion,
+            artifacts=artifacts,
+            evidence=result.get("evidence") or [],
+            anchor_position_idx=result.get("anchor_position_idx"),
+            enabled=settings.finding_policy_enabled,
+        )
+        final_status = gate.status
         if final_status == "pass":
             continue
 
         templates = criterion.get("comment_templates") or {}
         comment_text = templates.get("fail") or criterion.get("description") or criterion.get("title") or criterion_code
         level = "danger" if severity == "required" and final_status in {"fail", "unknown"} else "warning"
-        anchor_position_idx = result.get("anchor_position_idx")
-        meta = dict(outcome.metadata)
-        if memory_rows and (anchor_position_idx is None or not result.get("evidence")):
+        anchor_position_idx = gate.anchor_position_idx
+        meta = dict(gate.metadata)
+        if memory_rows and (anchor_position_idx is None or not gate.evidence):
             learned = choose_insertion_anchor(
                 artifacts,
                 memory_rows,
@@ -1234,12 +1246,12 @@ def run_offline_autoreview(
                 "criterion_code": criterion_code,
                 "status": final_status,
                 "severity": severity,
-                "confidence": outcome.confidence,
+                "confidence": gate.confidence,
                 "anchor_position_idx": int(anchor_position_idx),
                 "alert_color": _alert_from_level(level),
                 "comment_text": str(comment_text),
                 "comment_html": html,
-                "evidence": result.get("evidence") or [],
+                "evidence": gate.evidence,
                 "metadata": meta,
             }
         )
