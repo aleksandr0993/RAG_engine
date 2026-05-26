@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     llm_base_url: str | None = None
     enable_llm_comment_generation: bool = False
     enable_llm_semantic_checks: bool = False
+    enable_llm_required_fail_verification: bool = False
+    llm_required_fail_verification_model: str | None = None
+    llm_required_fail_max_input_chars: int = 60_000
+    llm_required_fail_max_output_tokens: int = 700
     llm_max_retries: int = 3
     llm_retry_min_wait_sec: float = 1.0
     llm_retry_max_wait_sec: float = 20.0

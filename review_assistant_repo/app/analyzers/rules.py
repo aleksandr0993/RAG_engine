@@ -40,7 +40,14 @@ class RuleEngine:
     def _run_rule(self, artifacts: list[dict], criterion: dict) -> dict:
         match = find_rule_match(artifacts, criterion)
         if match is not None:
-            meta = {"mode": "rule", "source_stage": "rule"}
+            meta = {
+                "mode": "rule",
+                "source_stage": "rule",
+                "order_policy": criterion.get("order_policy") or "anywhere",
+                "global_rule_match": True,
+                "rule_match_count": match.get("match_count", 1),
+                "rule_match_score": match.get("match_score"),
+            }
             if str((criterion.get("rule") or {}).get("match_scope") or "artifact") == "project":
                 meta["match_scope"] = "project"
             return {

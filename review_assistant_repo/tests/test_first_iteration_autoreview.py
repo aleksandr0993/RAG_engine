@@ -838,6 +838,48 @@ def test_evaluate_first_iteration_llm_judge_calibration_writes_artifacts(tmp_pat
     assert "by_llm_drop_recovered" in payload["candidate_auc"]["breakdowns"]
 
 
+def test_evaluate_first_iteration_llm_required_fail_gate_writes_metadata(tmp_path: Path, monkeypatch):
+    class FakeRequiredFailLLM:
+        is_available = True
+
+        def chat(self, messages, temperature=0.2, *, model=None, max_tokens=None):
+            return LLMCallResult(
+                ok=True,
+                text='{"status":"not_found","confidence":0.8,"anchor_position_idx":null,"evidence_quote":"","reason":"no evidence"}',
+                model=model or "fake",
+            )
+
+    monkeypatch.setenv("ENABLE_LLM_REQUIRED_FAIL_VERIFICATION", "true")
+    monkeypatch.setenv("LLM_REQUIRED_FAIL_VERIFICATION_MODEL", "gpt-test")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    restored = tmp_path / "restored.ipynb"
+    reviewed = tmp_path / "reviewed.ipynb"
+    _write_nb(restored, [new_code_cell("x = 1")])
+    _write_nb(reviewed, [new_code_cell("x = 1")])
+
+    evaluate_first_iteration(
+        reviewed_notebook=reviewed,
+        restored_notebook=restored,
+        project="python_preprocessing",
+        criteria_map="notebook_games_preprocessing_v1",
+        out_dir=tmp_path / "required_gate_eval",
+        llm_service=FakeRequiredFailLLM(),
+    )
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "required_gate_eval" / "predicted_insertions.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert rows
+    assert all(not (row["status"] == "fail" and not row.get("evidence")) for row in rows)
+    assert any((row.get("metadata") or {}).get("policy_llm_required_fail_verification_used") is True for row in rows)
+    assert any((row.get("metadata") or {}).get("policy_whole_notebook_verification") == "llm_not_found_downgraded" for row in rows)
+    get_settings.cache_clear()
+
+
 def test_evaluate_first_iteration_cli(tmp_path: Path):
     repo = Path(__file__).resolve().parents[1]
     restored = tmp_path / "restored.ipynb"

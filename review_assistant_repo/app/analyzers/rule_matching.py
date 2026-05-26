@@ -25,7 +25,26 @@ def _anchor_patterns(spec: dict[str, Any]) -> list[str]:
     return _patterns(spec, "patterns_any") or _patterns(spec, "patterns_all")
 
 
-def find_rule_match(artifacts: list[dict[str, Any]], criterion: dict[str, Any]) -> dict[str, Any] | None:
+def _artifact_score(artifact: dict[str, Any], spec: dict[str, Any]) -> float:
+    text = str(artifact.get("normalized_text") or "").lower()
+    score = 0.0
+    score += 2.0 if artifact.get("artifact_type") == "code_cell" else 0.5
+    score += min(len(text), 2000) / 2000
+    for pattern in _patterns(spec, "patterns_all"):
+        if pattern in text:
+            score += 1.0
+    for pattern in _patterns(spec, "patterns_any"):
+        if pattern in text:
+            score += 0.5
+    meta = artifact.get("metadata_json") or artifact.get("metadata") or {}
+    if meta.get("has_outputs"):
+        score += 0.35
+    if meta.get("has_plot_code"):
+        score += 0.15
+    return round(score, 4)
+
+
+def find_rule_matches(artifacts: list[dict[str, Any]], criterion: dict[str, Any]) -> list[dict[str, Any]]:
     rule = criterion.get("rule", {})
     artifact_types = set(rule.get("artifact_types", []))
     match_scope = str(rule.get("match_scope") or "artifact")
@@ -36,6 +55,7 @@ def find_rule_match(artifacts: list[dict[str, Any]], criterion: dict[str, Any]) 
         if not artifact_types or artifact["artifact_type"] in artifact_types
         if not (artifact.get("metadata_json") or artifact.get("metadata") or {}).get("is_practicum_instruction")
     ]
+    matches: list[dict[str, Any]] = []
 
     for spec in _rule_specs(rule):
         if match_scope == "project":
@@ -57,19 +77,40 @@ def find_rule_match(artifacts: list[dict[str, Any]], criterion: dict[str, Any]) 
                     ),
                     chunks[0][0],
                 )
-                return {
+                matches.append({
                     "anchor_position_idx": anchor.get("position_idx"),
                     "evidence": [{"excerpt": (anchor.get("normalized_text") or "")[:250]}],
-                }
+                    "match_score": _artifact_score(anchor, spec),
+                    "match_scope": "project",
+                })
+            continue
 
         for artifact in candidates:
             norm = artifact.get("normalized_text") or ""
             if min_len is not None and len(norm) < int(min_len):
                 continue
             if _matches(norm.lower(), spec):
-                return {
+                matches.append({
                     "anchor_position_idx": artifact.get("position_idx"),
                     "evidence": [{"excerpt": (artifact.get("normalized_text") or "")[:250]}],
-                }
+                    "match_score": _artifact_score(artifact, spec),
+                    "match_scope": "artifact",
+                })
 
-    return None
+    matches.sort(
+        key=lambda item: (
+            float(item.get("match_score") or 0.0),
+            -int(item.get("anchor_position_idx") or 0),
+        ),
+        reverse=True,
+    )
+    return matches
+
+
+def find_rule_match(artifacts: list[dict[str, Any]], criterion: dict[str, Any]) -> dict[str, Any] | None:
+    matches = find_rule_matches(artifacts, criterion)
+    if not matches:
+        return None
+    best = dict(matches[0])
+    best["match_count"] = len(matches)
+    return best

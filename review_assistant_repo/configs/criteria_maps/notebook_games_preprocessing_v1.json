@@ -3,6 +3,7 @@
     {
       "code": "games_project_intro",
       "category": "structure",
+      "order_policy": "near_section",
       "applies_to": "ipynb",
       "severity": "required",
       "title": "Есть введение к проекту про игровую индустрию",
@@ -19,6 +20,7 @@
     {
       "code": "games_dataset_loaded",
       "category": "data_loading",
+      "order_policy": "anywhere",
       "applies_to": "ipynb",
       "severity": "required",
       "title": "Загружен датасет new_games.csv",
@@ -41,6 +43,7 @@
     {
       "code": "games_initial_overview",
       "category": "data_loading",
+      "order_policy": "anywhere",
       "applies_to": "ipynb",
       "severity": "required",
       "title": "Есть первичное знакомство с данными",
@@ -64,6 +67,7 @@
     {
       "code": "games_overview_commentary",
       "category": "analysis",
+      "order_policy": "anywhere",
       "applies_to": "ipynb",
       "severity": "warning",
       "title": "Есть текстовый вывод после знакомства с данными",
@@ -94,6 +98,7 @@
     {
       "code": "games_columns_snake_case",
       "category": "data_quality",
+      "order_policy": "anywhere",
       "applies_to": "ipynb",
       "severity": "required",
       "title": "Названия столбцов приведены к snake_case",
@@ -117,6 +122,7 @@
     {
       "code": "games_scores_numeric_conversion",
       "category": "data_quality",
+      "order_policy": "anywhere",
       "applies_to": "ipynb",
       "severity": "required",
       "title": "Проблемные числовые столбцы приведены к числовому типу",
@@ -143,6 +149,7 @@
     {
       "code": "games_missing_values_quantified",
       "category": "data_quality",
+      "order_policy": "anywhere",
       "applies_to": "ipynb",
       "severity": "required",
       "title": "Пропуски посчитаны в абсолютных и относительных значениях",
@@ -166,6 +173,7 @@
     {
       "code": "games_missing_values_decision",
       "category": "data_quality",
+      "order_policy": "anywhere",
       "applies_to": "ipynb",
       "severity": "required",
       "title": "Есть решение по обработке пропусков",
@@ -201,6 +209,7 @@
     {
       "code": "games_genre_normalized",
       "category": "data_quality",
+      "order_policy": "anywhere",
       "applies_to": "ipynb",
       "severity": "required",
       "title": "Жанры нормализованы для устранения неявных дубликатов",
@@ -223,6 +232,7 @@
     {
       "code": "games_duplicates_checked",
       "category": "data_quality",
+      "order_policy": "anywhere",
       "applies_to": "ipynb",
       "severity": "required",
       "title": "Проверены явные и неявные дубликаты",
@@ -247,6 +257,7 @@
     {
       "code": "games_removed_rows_quantified",
       "category": "data_quality",
+      "order_policy": "anywhere",
       "applies_to": "ipynb",
       "severity": "warning",
       "title": "Оценено количество удалённых строк",
@@ -270,6 +281,7 @@
     {
       "code": "games_actual_period_filter",
       "category": "transformation",
+      "order_policy": "anywhere",
       "applies_to": "ipynb",
       "severity": "required",
       "title": "Сформирован срез за 2000-2013 годы",
@@ -293,6 +305,7 @@
     {
       "code": "games_score_categories",
       "category": "transformation",
+      "order_policy": "anywhere",
       "applies_to": "ipynb",
       "severity": "required",
       "title": "Созданы категории оценок пользователей и критиков",
@@ -322,6 +335,7 @@
     {
       "code": "games_top7_platforms",
       "category": "analysis",
+      "order_policy": "anywhere",
       "applies_to": "ipynb",
       "severity": "required",
       "title": "Выделены топ-7 платформ по количеству игр",
@@ -403,6 +417,7 @@
     {
       "code": "games_final_conclusion",
       "category": "analysis",
+      "order_policy": "relative_order",
       "applies_to": "ipynb",
       "severity": "warning",
       "title": "Есть финальный вывод",

@@ -555,6 +555,12 @@ class ReviewService:
                 evidence=result.get("evidence") or [],
                 anchor_position_idx=result.get("anchor_position_idx"),
                 enabled=settings.finding_policy_enabled,
+                llm_service=llm_service,
+                enable_llm_required_fail_verification=settings.enable_llm_required_fail_verification,
+                llm_required_fail_verification_model=settings.llm_required_fail_verification_model,
+                llm_required_fail_max_input_chars=settings.llm_required_fail_max_input_chars,
+                llm_required_fail_max_output_tokens=settings.llm_required_fail_max_output_tokens,
+                failed_comment_text=fail_text,
             )
             final_status = gate.status
             final_confidence = gate.confidence
