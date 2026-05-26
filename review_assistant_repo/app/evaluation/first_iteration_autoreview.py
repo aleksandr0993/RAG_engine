@@ -39,7 +39,7 @@ _EXPLICIT_REVIEW_VERSION_RE = re.compile(r"Комментарий\s+ревьюе
 _TOKEN_RE = re.compile(r"[\wа-яА-ЯёЁ]+", re.UNICODE)
 _ACTIONABLE_STATUSES = {"memory_fail", "memory_warn"}
 _ACTIONABLE_COMMENT_KINDS = {"actionable_feedback"}
-_LLM_JUDGE_FILTER_MODES = {"off", "balanced", "aggressive"}
+_LLM_JUDGE_FILTER_MODES = {"off", "balanced", "aggressive", "recall_preserving"}
 _SOURCE_SUPPORT_RANK = {"none": 0, "weak": 1, "medium": 2, "strong": 3}
 _GENERIC_REVIEW_RE = re.compile(
     r"\b(молодец|отлично|хорошо|всё отлично|все отлично|стоит улучшить|добавь вывод|проверь)\b",
@@ -538,6 +538,7 @@ def _candidate_breakdowns(labeled: list[dict[str, Any]], *, decision_threshold: 
         "by_source_stage": lambda row: str((row.get("metadata") or {}).get("source_stage") or "unknown"),
         "by_comment_kind": lambda row: str(row.get("comment_kind") or "unknown"),
         "by_calibration_decision": lambda row: str(row.get("calibration_decision") if row.get("calibration_decision") is not None else "unknown"),
+        "by_llm_drop_recovered": lambda row: str(row.get("llm_drop_but_recovered") if row.get("llm_drop_but_recovered") is not None else "unknown"),
     }
     out: dict[str, Any] = {}
     for name, key_fn in specs.items():
@@ -655,6 +656,7 @@ def _calibrate_candidate(
 
     updated = dict(candidate)
     meta = dict(updated.get("metadata") or {})
+    recall_preserving = filter_mode == "recall_preserving"
     if filter_mode == "off":
         meta["calibration_status"] = "off"
         updated["metadata"] = meta
@@ -676,7 +678,10 @@ def _calibrate_candidate(
     criterion_ok = _bool_from_json(meta.get("llm_criterion_ok"), default=True)
     style_score = _float01(meta.get("llm_style_match_score"), default=0.7)
     anchor_similarity = _anchor_text_similarity(updated, artifacts)
+    retrieval_score = _float01(meta.get("memory_candidate_score") or updated.get("confidence"), default=0.0)
     score = _candidate_keep_score(updated)
+    if recall_preserving:
+        score = max(score, retrieval_score)
 
     if support == "strong":
         score += 0.08
@@ -684,20 +689,32 @@ def _calibrate_candidate(
     elif support == "medium":
         score += 0.02
     elif support == "weak":
-        score -= 0.18
+        score -= 0.06 if recall_preserving else 0.18
         reasons.append("weak_support_penalty")
     else:
-        score -= 0.30
+        score -= 0.12 if recall_preserving else 0.30
         reasons.append("missing_support_penalty")
 
     if not llm_keep:
-        score -= 0.50
+        score -= 0.12 if recall_preserving else 0.50
         reasons.append("llm_drop")
+        if recall_preserving:
+            reasons.append("historical_gold_recall_guard")
+    high_retrieval = retrieval_score >= 0.82
+    recovery_context_ok = anchor_similarity >= 0.08
     if not anchor_ok:
-        score -= 0.50
+        if recall_preserving and high_retrieval and recovery_context_ok:
+            score -= 0.16
+            reasons.append("bad_anchor_softened_by_retrieval")
+        else:
+            score -= 0.35 if recall_preserving else 0.50
         reasons.append("bad_anchor")
     if not criterion_ok:
-        score -= 0.50
+        if recall_preserving and high_retrieval and recovery_context_ok:
+            score -= 0.16
+            reasons.append("bad_criterion_softened_by_retrieval")
+        else:
+            score -= 0.35 if recall_preserving else 0.50
         reasons.append("bad_criterion")
     if style_score < 0.5:
         score -= 0.10
@@ -720,28 +737,52 @@ def _calibrate_candidate(
     if _is_actionable_memory_candidate(updated) and support in {"medium", "strong"} and anchor_similarity >= 0.08:
         score += 0.06
         reasons.append("actionable_evidence_bonus")
+    if recall_preserving and _is_actionable_memory_candidate(updated) and high_retrieval:
+        score += 0.12
+        reasons.append("high_retrieval_actionable_recall_bonus")
+    if recall_preserving and support == "none" and high_retrieval and recovery_context_ok:
+        score += 0.06
+        reasons.append("none_support_recovered_by_retrieval_anchor")
 
     calibrated = round(max(0.0, min(1.0, score)), 4)
     threshold = 0.85 if filter_mode == "aggressive" else 0.75
+    if recall_preserving:
+        threshold = 0.70
     support_ok = _support_at_least(support, "medium")
-    if filter_mode == "aggressive" and _is_actionable_memory_candidate(updated):
+    if recall_preserving:
+        support_ok = _support_at_least(support, "weak") or (support == "none" and high_retrieval and recovery_context_ok)
+    elif filter_mode == "aggressive" and _is_actionable_memory_candidate(updated):
         support_ok = support == "strong"
-    decision = bool(llm_keep and anchor_ok and criterion_ok and support_ok and calibrated >= threshold)
+    hard_anchor_or_criterion_drop = recall_preserving and (not anchor_ok or not criterion_ok) and not (
+        high_retrieval and recovery_context_ok
+    )
+    if recall_preserving:
+        decision = bool(support_ok and not hard_anchor_or_criterion_drop and calibrated >= threshold)
+    else:
+        decision = bool(llm_keep and anchor_ok and criterion_ok and support_ok and calibrated >= threshold)
     if not support_ok:
         reasons.append("insufficient_source_support")
+    if hard_anchor_or_criterion_drop:
+        reasons.append("hard_anchor_or_criterion_drop")
     if calibrated < threshold:
         reasons.append("below_calibrated_threshold")
+    recovered = bool(recall_preserving and decision and not llm_keep)
 
     updated["calibrated_keep_score"] = calibrated
     updated["calibration_decision"] = decision
     updated["calibration_reasons"] = reasons
+    updated["llm_drop_but_recovered"] = recovered
     meta["calibration_status"] = "ok"
     meta["calibration_filter_mode"] = filter_mode
+    meta["calibration_profile"] = "historical_recall" if recall_preserving else "strict_current_validity"
+    meta["historical_eval_mode"] = recall_preserving
     meta["calibrated_keep_score"] = calibrated
     meta["calibration_decision"] = decision
     meta["calibration_reasons"] = reasons
     meta["calibration_anchor_context_similarity"] = anchor_similarity
     meta["calibration_duplicate_rank"] = duplicate_rank
+    meta["calibration_retrieval_score"] = retrieval_score
+    meta["llm_drop_but_recovered"] = recovered
     updated["metadata"] = meta
     return updated
 
@@ -796,6 +837,7 @@ def _merge_selected_candidate_fields(
         "calibrated_keep_score",
         "calibration_decision",
         "calibration_reasons",
+        "llm_drop_but_recovered",
         "comment_kind",
         "alert_color",
         "status",
@@ -1108,7 +1150,7 @@ def run_offline_autoreview(
     enable_llm_generator: bool = False,
     enable_llm_classifier: bool = False,
     enable_llm_anchor_validator: bool = False,
-    llm_judge_filter_mode: str = "balanced",
+    llm_judge_filter_mode: str = "recall_preserving",
     llm_max_candidates: int = 30,
     llm_service: LLMService | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]], dict[str, Any] | None, list[dict[str, Any]]]:
@@ -1321,6 +1363,7 @@ def compare_predictions(predicted: list[dict[str, Any]], gold: list[dict[str, An
             "extra_total": len(extra),
             "precision_approx": round(len(matches) / len(predicted), 4) if predicted else 0.0,
             "recall_approx": round(len(matches) / len(gold), 4) if gold else 0.0,
+            "historical_gold_recall": round(len(matches) / len(gold), 4) if gold else 0.0,
             "actionable_recall_approx": round((len(actionable_gold) - len(actionable_missed)) / len(actionable_gold), 4)
             if actionable_gold
             else 0.0,
@@ -1335,6 +1378,9 @@ def compare_predictions(predicted: list[dict[str, Any]], gold: list[dict[str, An
             ),
             "predicted_calibration_decision_counts": dict(
                 Counter(str(p.get("calibration_decision") if p.get("calibration_decision") is not None else "unknown") for p in predicted)
+            ),
+            "predicted_llm_drop_recovered_counts": dict(
+                Counter(str(p.get("llm_drop_but_recovered") if p.get("llm_drop_but_recovered") is not None else "unknown") for p in predicted)
             ),
         },
         "matches": matches,
@@ -1361,7 +1407,7 @@ def render_report(payload: dict[str, Any]) -> str:
         f"- Matched: {s['matched_total']}",
         f"- Missed gold: {s['missed_total']} (actionable: {s['missed_actionable']})",
         f"- Extra predicted: {s['extra_total']}",
-        f"- Approx precision / recall: {s['precision_approx']} / {s['recall_approx']}",
+        f"- Approx precision / historical gold recall: {s['precision_approx']} / {s.get('historical_gold_recall', s['recall_approx'])}",
         f"- Actionable recall: {s['actionable_recall_approx']}",
         f"- Anchor exact / within 1 / within 2: {s['anchor_exact']} / {s['anchor_within_1']} / {s['anchor_within_2']}",
         f"- Anchor mean delta: {s['anchor_mean_delta']}",
@@ -1369,6 +1415,7 @@ def render_report(payload: dict[str, Any]) -> str:
         f"- Predicted statuses: {json.dumps(s['predicted_status_counts'], ensure_ascii=False)}",
         f"- Predicted source stages: {json.dumps(s.get('predicted_source_stage_counts', {}), ensure_ascii=False)}",
         f"- Predicted calibration decisions: {json.dumps(s.get('predicted_calibration_decision_counts', {}), ensure_ascii=False)}",
+        f"- LLM drops recovered: {json.dumps(s.get('predicted_llm_drop_recovered_counts', {}), ensure_ascii=False)}",
         f"- Memory candidate ROC-AUC: {auc.get('roc_auc')}",
         f"- Memory candidate PR-AUC/AP: {auc.get('pr_auc_average_precision')}",
         f"- Memory candidate F1 @ {at_threshold.get('threshold')}: {at_threshold.get('f1')} "
@@ -1384,6 +1431,7 @@ def render_report(payload: dict[str, Any]) -> str:
         ("Comment kind", "by_comment_kind"),
         ("Status", "by_status"),
         ("Calibration decision", "by_calibration_decision"),
+        ("LLM drop recovered", "by_llm_drop_recovered"),
     ]:
         rows = breakdowns.get(key) or {}
         lines.extend([f"### {title}", "", "| Bucket | Total | Pos | Neg | ROC-AUC | F1 |", "|---|---:|---:|---:|---:|---:|"])
@@ -1438,7 +1486,7 @@ def evaluate_first_iteration(
     enable_llm_generator: bool = False,
     enable_llm_classifier: bool = False,
     enable_llm_anchor_validator: bool = False,
-    llm_judge_filter_mode: str = "balanced",
+    llm_judge_filter_mode: str = "recall_preserving",
     llm_max_candidates: int = 30,
     decision_threshold: float = 0.5,
     candidate_score_field: str | None = None,

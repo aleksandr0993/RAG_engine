@@ -63,8 +63,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--llm-judge-filter-mode",
-        default="balanced",
-        choices=["off", "balanced", "aggressive"],
+        default="recall_preserving",
+        choices=["off", "balanced", "aggressive", "recall_preserving"],
         help="Offline-only deterministic gate applied after LLM judge for memory candidates.",
     )
     parser.add_argument("--llm-max-candidates", type=int, default=30, help="Maximum selected memory candidates sent to LLM.")

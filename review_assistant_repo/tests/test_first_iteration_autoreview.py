@@ -405,6 +405,119 @@ def test_llm_judge_calibration_balanced_filters_weak_support_and_keeps_medium_su
     assert out[1]["calibrated_keep_score"] >= 0.75
 
 
+def test_llm_judge_calibration_recall_preserving_recovers_high_score_actionable_drop():
+    artifacts = [
+        {
+            "artifact_type": "code_cell",
+            "position_idx": 1,
+            "normalized_text": "df['user_score'].unique()\npd.to_numeric(df['user_score'], errors='coerce')",
+            "metadata_json": {},
+        }
+    ]
+    candidate = {
+        "criterion_code": "games_scores_numeric_conversion",
+        "status": "memory_fail",
+        "confidence": 0.86,
+        "keep_score": 0.0,
+        "anchor_position_idx": 1,
+        "alert_color": "danger",
+        "comment_kind": "actionable_feedback",
+        "comment_text": "Проверь user_score unique перед pd.to_numeric errors coerce.",
+        "metadata": {
+            "source_stage": "llm",
+            "memory_candidate_score": 0.86,
+            "llm_judge_used": True,
+            "llm_judge_keep": False,
+            "llm_anchor_ok": True,
+            "llm_criterion_ok": True,
+            "llm_source_support": "weak",
+            "llm_style_match_score": 0.8,
+            "llm_drop_reason": "already fixed",
+        },
+    }
+
+    strict = apply_llm_judge_calibration([candidate], artifacts=artifacts, filter_mode="balanced")
+    recall = apply_llm_judge_calibration([candidate], artifacts=artifacts, filter_mode="recall_preserving")
+
+    assert strict[0]["calibration_decision"] is False
+    assert recall[0]["calibration_decision"] is True
+    assert recall[0]["llm_drop_but_recovered"] is True
+    assert recall[0]["metadata"]["historical_eval_mode"] is True
+    assert "historical_gold_recall_guard" in recall[0]["calibration_reasons"]
+
+
+def test_llm_judge_calibration_recall_preserving_still_drops_low_retrieval_bad_anchor():
+    artifacts = [
+        {
+            "artifact_type": "code_cell",
+            "position_idx": 1,
+            "normalized_text": "df.info()",
+            "metadata_json": {},
+        }
+    ]
+    candidate = {
+        "criterion_code": "games_scores_numeric_conversion",
+        "status": "memory_fail",
+        "confidence": 0.4,
+        "keep_score": 0.8,
+        "anchor_position_idx": 1,
+        "alert_color": "danger",
+        "comment_kind": "actionable_feedback",
+        "comment_text": "Проверь user_score unique перед pd.to_numeric errors coerce.",
+        "metadata": {
+            "source_stage": "llm",
+            "memory_candidate_score": 0.4,
+            "llm_judge_used": True,
+            "llm_judge_keep": True,
+            "llm_anchor_ok": False,
+            "llm_criterion_ok": True,
+            "llm_source_support": "none",
+            "llm_style_match_score": 0.8,
+        },
+    }
+
+    out = apply_llm_judge_calibration([candidate], artifacts=artifacts, filter_mode="recall_preserving")
+
+    assert out[0]["calibration_decision"] is False
+    assert "hard_anchor_or_criterion_drop" in out[0]["calibration_reasons"]
+
+
+def test_llm_judge_calibration_recall_preserving_recovers_none_support_with_retrieval_anchor_overlap():
+    artifacts = [
+        {
+            "artifact_type": "code_cell",
+            "position_idx": 1,
+            "normalized_text": "df['user_score'].unique()\npd.to_numeric(df['user_score'], errors='coerce')",
+            "metadata_json": {},
+        }
+    ]
+    candidate = {
+        "criterion_code": "games_scores_numeric_conversion",
+        "status": "memory_fail",
+        "confidence": 0.9,
+        "keep_score": 0.7,
+        "anchor_position_idx": 1,
+        "alert_color": "danger",
+        "comment_kind": "actionable_feedback",
+        "comment_text": "Проверь user_score unique перед pd.to_numeric errors coerce.",
+        "metadata": {
+            "source_stage": "llm",
+            "memory_candidate_score": 0.9,
+            "llm_judge_used": True,
+            "llm_judge_keep": True,
+            "llm_anchor_ok": True,
+            "llm_criterion_ok": True,
+            "llm_source_support": "none",
+            "llm_style_match_score": 0.8,
+        },
+    }
+
+    out = apply_llm_judge_calibration([candidate], artifacts=artifacts, filter_mode="recall_preserving")
+
+    assert out[0]["calibration_decision"] is True
+    assert "none_support_recovered_by_retrieval_anchor" in out[0]["calibration_reasons"]
+
+
 def test_llm_judge_calibration_penalizes_duplicates_and_off_preserves_legacy():
     artifacts = [
         {
@@ -708,7 +821,7 @@ def test_evaluate_first_iteration_llm_judge_calibration_writes_artifacts(tmp_pat
         reviewer_insertions_path=memory,
         memory_candidate_min_score=0.1,
         enable_llm_judge=True,
-        llm_judge_filter_mode="balanced",
+        llm_judge_filter_mode="recall_preserving",
         llm_service=FakeJudgeLLM(),
         candidate_score_field="calibrated_keep_score",
     )
@@ -719,9 +832,10 @@ def test_evaluate_first_iteration_llm_judge_calibration_writes_artifacts(tmp_pat
         if line.strip()
     ]
     assert any(row.get("calibrated_keep_score") is not None for row in rows)
-    assert any(row.get("calibration_decision") is False for row in rows)
+    assert any((row.get("metadata") or {}).get("calibration_profile") == "historical_recall" for row in rows)
     assert payload["candidate_auc"]["score_field"] == "calibrated_keep_score"
     assert "by_calibration_decision" in payload["candidate_auc"]["breakdowns"]
+    assert "by_llm_drop_recovered" in payload["candidate_auc"]["breakdowns"]
 
 
 def test_evaluate_first_iteration_cli(tmp_path: Path):
