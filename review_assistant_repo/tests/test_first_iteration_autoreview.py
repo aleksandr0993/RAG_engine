@@ -103,6 +103,72 @@ def test_compare_predictions_counts_match_missed_and_extra():
     assert comparison["summary"]["anchor_within_1"] == 1
 
 
+def test_compare_predictions_blocks_kind_and_alert_mismatch():
+    gold = [
+        {
+            "comment_text": "Проверь количество пропусков в данных и объясни решение.",
+            "criterion_code": "games_missing_values_quantified",
+            "alert_color": "danger",
+            "anchor_position_idx": 3,
+            "comment_kind": "actionable_feedback",
+        }
+    ]
+    predicted = [
+        {
+            "comment_text": "Отличная первичная проверка данных.",
+            "criterion_code": "games_missing_values_quantified",
+            "alert_color": "success",
+            "anchor_position_idx": 3,
+            "comment_kind": "criterion_success",
+            "status": "pass",
+        }
+    ]
+
+    comparison = compare_predictions(predicted, gold)
+
+    assert comparison["summary"]["matched_total"] == 0
+    assert comparison["summary"]["semantic_mismatch"] == 1
+    assert comparison["summary"]["semantic_mismatch_reason_counts"] == {"comment_kind_mismatch": 1}
+    assert comparison["summary"]["missed_total"] == 1
+    assert comparison["summary"]["extra_total"] == 1
+
+
+def test_compare_predictions_requires_strong_danger_text_or_issue_type():
+    gold = [
+        {
+            "comment_text": "Обработай пропуски в critic_score и user_score, чтобы анализ не искажался.",
+            "criterion_code": "games_missing_values_decision",
+            "alert_color": "danger",
+            "anchor_position_idx": 10,
+            "comment_kind": "actionable_feedback",
+        }
+    ]
+    predicted = [
+        {
+            "comment_text": "Проверь оформление вывода и добавь больше пояснений.",
+            "criterion_code": "games_missing_values_decision",
+            "alert_color": "danger",
+            "anchor_position_idx": 10,
+            "comment_kind": "actionable_feedback",
+            "status": "fail",
+        }
+    ]
+
+    blocked = compare_predictions(predicted, gold)
+
+    assert blocked["summary"]["matched_total"] == 0
+    assert blocked["summary"]["semantic_mismatch_reason_counts"] == {
+        "danger_match_requires_high_text_similarity_or_issue_type": 1
+    }
+
+    predicted[0]["metadata"] = {"issue_type": "missing_values"}
+    gold[0]["metadata"] = {"issue_type": "missing_values"}
+    allowed = compare_predictions(predicted, gold)
+
+    assert allowed["summary"]["matched_total"] == 1
+    assert allowed["summary"]["loose_matched"] == 1
+
+
 def test_generate_first_iteration_memory_candidates_uses_success_and_praise_rows():
     artifacts = [
         {
@@ -732,7 +798,7 @@ def test_evaluate_first_iteration_quality_judge_adds_artifact_block(tmp_path: Pa
                 "project_type": "python_preprocessing",
                 "review_iteration": 1,
                 "reviewed_notebook": "other.ipynb",
-                "comment_kind": "criterion_success",
+                "comment_kind": "actionable_feedback",
                 "alert_color": "warning",
                 "criterion_code": "games_columns_snake_case",
                 "comment_text": "Комментарий ревьюера Названия столбцов приведены к snake_case",
@@ -931,7 +997,7 @@ def test_build_first_iteration_candidate_dataset_cli_selects_val_threshold(tmp_p
                 "project_type": "python_preprocessing",
                 "review_iteration": 1,
                 "reviewed_notebook": "other.ipynb",
-                "comment_kind": "criterion_success",
+                "comment_kind": "actionable_feedback",
                 "alert_color": "warning",
                 "criterion_code": "games_columns_snake_case",
                 "comment_text": "Комментарий ревьюера Названия столбцов приведены к snake_case",

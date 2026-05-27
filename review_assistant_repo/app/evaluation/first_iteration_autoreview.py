@@ -42,6 +42,9 @@ _ACTIONABLE_STATUSES = {"memory_fail", "memory_warn"}
 _ACTIONABLE_COMMENT_KINDS = {"actionable_feedback"}
 _LLM_JUDGE_FILTER_MODES = {"off", "balanced", "aggressive", "recall_preserving"}
 _SOURCE_SUPPORT_RANK = {"none": 0, "weak": 1, "medium": 2, "strong": 3}
+_MATCH_SCORE_THRESHOLD = 0.35
+_DANGER_MATCH_TEXT_SIMILARITY_MIN = 0.28
+_UNKNOWN_MATCH_VALUES = {"", "unknown", "none", "null"}
 _GENERIC_REVIEW_RE = re.compile(
     r"\b(молодец|отлично|хорошо|всё отлично|все отлично|стоит улучшить|добавь вывод|проверь)\b",
     re.IGNORECASE,
@@ -154,6 +157,98 @@ def _kind_from_memory_status(status: str) -> str:
     if status in {"memory_fail", "memory_warn"}:
         return "actionable_feedback"
     return "unknown"
+
+
+def _norm_match_value(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _is_unknown_match_value(value: Any) -> bool:
+    return _norm_match_value(value) in _UNKNOWN_MATCH_VALUES
+
+
+def _row_meta(row: dict[str, Any]) -> dict[str, Any]:
+    meta = row.get("metadata")
+    if isinstance(meta, dict):
+        return meta
+    meta = row.get("metadata_json")
+    return meta if isinstance(meta, dict) else {}
+
+
+def _row_issue_type(row: dict[str, Any]) -> str:
+    meta = _row_meta(row)
+    for key in ("issue_type", "issue_code", "criterion_issue_type"):
+        value = row.get(key) or meta.get(key)
+        if value:
+            return str(value).strip().lower()
+    return ""
+
+
+def _comment_group(row: dict[str, Any]) -> str:
+    kind = _norm_match_value(row.get("comment_kind"))
+    alert = _norm_match_value(row.get("alert_color"))
+    if kind == "actionable_feedback" or alert == "danger":
+        return "actionable"
+    if kind in {"criterion_success", "non_criterion_praise"} or alert == "success":
+        return "praise_success"
+    if alert == "warning":
+        return "warning_recommendation"
+    return "other"
+
+
+def _is_actionable_comment(row: dict[str, Any]) -> bool:
+    return _norm_match_value(row.get("comment_kind")) == "actionable_feedback" or _norm_match_value(row.get("alert_color")) == "danger"
+
+
+def _is_praise_success_comment(row: dict[str, Any]) -> bool:
+    kind = _norm_match_value(row.get("comment_kind"))
+    return kind in {"criterion_success", "non_criterion_praise"} or _norm_match_value(row.get("alert_color")) == "success"
+
+
+def _is_warning_recommendation(row: dict[str, Any]) -> bool:
+    return _norm_match_value(row.get("alert_color")) == "warning"
+
+
+def _match_kind_and_alert_compatibility(
+    pred: dict[str, Any],
+    gold: dict[str, Any],
+    *,
+    text_sim: float,
+) -> tuple[str, list[str]]:
+    reasons: list[str] = []
+    match_type = "strict_matched"
+
+    pred_kind = _norm_match_value(pred.get("comment_kind"))
+    gold_kind = _norm_match_value(gold.get("comment_kind"))
+    if pred_kind != gold_kind:
+        if _is_unknown_match_value(pred_kind) or _is_unknown_match_value(gold_kind):
+            match_type = "loose_matched"
+            reasons.append("unknown_comment_kind_allowed")
+        else:
+            return "semantic_mismatch", ["comment_kind_mismatch"]
+
+    pred_alert = _norm_match_value(pred.get("alert_color"))
+    gold_alert = _norm_match_value(gold.get("alert_color"))
+    if pred_alert != gold_alert:
+        if _is_unknown_match_value(pred_alert) or _is_unknown_match_value(gold_alert):
+            match_type = "loose_matched"
+            reasons.append("unknown_alert_color_allowed")
+        else:
+            return "semantic_mismatch", ["alert_color_mismatch"]
+
+    if "danger" in {pred_alert, gold_alert}:
+        pred_issue = _row_issue_type(pred)
+        gold_issue = _row_issue_type(gold)
+        issue_match = bool(pred_issue and gold_issue and pred_issue == gold_issue)
+        if text_sim < _DANGER_MATCH_TEXT_SIMILARITY_MIN and not issue_match:
+            return "semantic_mismatch", ["danger_match_requires_high_text_similarity_or_issue_type"]
+        if issue_match and text_sim < _DANGER_MATCH_TEXT_SIMILARITY_MIN:
+            match_type = "loose_matched"
+            reasons.append("danger_issue_type_match_allowed")
+
+    if not reasons:
+        reasons.append("strict_kind_alert_match")
+    return match_type, reasons
 
 
 def _public_gold_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -538,6 +633,7 @@ def _candidate_breakdowns(labeled: list[dict[str, Any]], *, decision_threshold: 
         "by_status": lambda row: str(row.get("status") or "unknown"),
         "by_source_stage": lambda row: str((row.get("metadata") or {}).get("source_stage") or "unknown"),
         "by_comment_kind": lambda row: str(row.get("comment_kind") or "unknown"),
+        "by_match_type": lambda row: str(row.get("match_type") or "unknown"),
         "by_calibration_decision": lambda row: str(row.get("calibration_decision") if row.get("calibration_decision") is not None else "unknown"),
         "by_llm_drop_recovered": lambda row: str(row.get("llm_drop_but_recovered") if row.get("llm_drop_but_recovered") is not None else "unknown"),
     }
@@ -572,29 +668,46 @@ def label_memory_candidates_for_auc(
     unmatched_gold = set(range(len(gold)))
     labeled: list[dict[str, Any]] = []
     for candidate in sorted(candidates, key=lambda item: float(item.get("confidence") or 0), reverse=True):
-        best: tuple[float, int] | None = None
+        best: tuple[float, int, dict[str, Any]] | None = None
+        best_blocked: tuple[float, int, dict[str, Any]] | None = None
         for gi in unmatched_gold:
             gold_row = gold[gi]
             if gold_row.get("criterion_code") and candidate.get("criterion_code") != gold_row.get("criterion_code"):
                 continue
-            score = _match_score(candidate, gold_row)
+            detail = _match_detail(candidate, gold_row)
+            score = float(detail["score"])
+            if detail["match_type"] == "semantic_mismatch":
+                if score >= min_match_score and (best_blocked is None or score > best_blocked[0]):
+                    best_blocked = (score, gi, detail)
+                continue
             if best is None or score > best[0]:
-                best = (score, gi)
+                best = (score, gi, detail)
         label = 0
         matched_gold_index: int | None = None
         match_score = 0.0
+        match_type = "unmatched"
+        match_reasons: list[str] = []
         if best is not None and best[0] >= min_match_score:
-            match_score, matched_gold_index = best
+            match_score, matched_gold_index, detail = best
+            match_type = str(detail.get("match_type") or "strict_matched")
+            match_reasons = list(detail.get("match_reasons") or [])
             unmatched_gold.remove(matched_gold_index)
             label = 1
+        elif best_blocked is not None:
+            match_score, matched_gold_index, detail = best_blocked
+            match_type = "semantic_mismatch"
+            match_reasons = list(detail.get("match_reasons") or [])
         row = dict(candidate)
         row["auc_label"] = label
         row["label"] = label
-        row["matched_gold_index"] = matched_gold_index
+        row["matched_gold_index"] = matched_gold_index if label else None
+        row["blocked_gold_index"] = matched_gold_index if match_type == "semantic_mismatch" else None
         row["match_score"] = match_score
+        row["match_type"] = match_type
+        row["match_reasons"] = match_reasons
         row["keep_score"] = _candidate_keep_score(row, score_field=score_field)
         row["project"] = project or row.get("project") or ""
-        if matched_gold_index is not None:
+        if label and matched_gold_index is not None:
             p_anchor = row.get("anchor_position_idx")
             g_anchor = gold[matched_gold_index].get("anchor_position_idx")
             row["anchor_delta"] = (
@@ -615,6 +728,9 @@ def label_memory_candidates_for_auc(
         "at_threshold": _classification_counts(points, decision_threshold),
         "best_f1_on_this_set": _best_f1_threshold(points),
         "breakdowns": _candidate_breakdowns(labeled, decision_threshold=decision_threshold),
+        "strict_matched_candidates": sum(1 for row in labeled if row.get("match_type") == "strict_matched"),
+        "loose_matched_candidates": sum(1 for row in labeled if row.get("match_type") == "loose_matched"),
+        "semantic_mismatch_candidates": sum(1 for row in labeled if row.get("match_type") == "semantic_mismatch"),
     }
     return labeled, summary
 
@@ -1314,7 +1430,7 @@ def run_offline_autoreview(
     return predicted, reviewed_obj, all_memory_candidates, project_memory, artifacts
 
 
-def _match_score(pred: dict[str, Any], gold: dict[str, Any]) -> float:
+def _raw_match_score(pred: dict[str, Any], gold: dict[str, Any], *, text_sim: float | None = None) -> float:
     score = 0.0
     if pred.get("criterion_code") and pred.get("criterion_code") == gold.get("criterion_code"):
         score += 0.45
@@ -1325,28 +1441,80 @@ def _match_score(pred: dict[str, Any], gold: dict[str, Any]) -> float:
     if p_anchor is not None and g_anchor is not None:
         delta = abs(int(p_anchor) - int(g_anchor))
         score += max(0.0, 0.25 - min(delta, 5) * 0.05)
-    score += 0.15 * text_similarity(str(pred.get("comment_text") or ""), str(gold.get("comment_text") or ""))
+    if text_sim is None:
+        text_sim = text_similarity(str(pred.get("comment_text") or ""), str(gold.get("comment_text") or ""))
+    score += 0.15 * text_sim
     return round(score, 4)
+
+
+def _match_detail(pred: dict[str, Any], gold: dict[str, Any]) -> dict[str, Any]:
+    text_sim = text_similarity(str(pred.get("comment_text") or ""), str(gold.get("comment_text") or ""))
+    score = _raw_match_score(pred, gold, text_sim=text_sim)
+    match_type, reasons = _match_kind_and_alert_compatibility(pred, gold, text_sim=text_sim)
+    pred_issue = _row_issue_type(pred)
+    gold_issue = _row_issue_type(gold)
+    return {
+        "score": score,
+        "match_type": match_type,
+        "match_reasons": reasons,
+        "text_similarity": text_sim,
+        "criterion_match": pred.get("criterion_code") == gold.get("criterion_code"),
+        "comment_kind_match": _norm_match_value(pred.get("comment_kind")) == _norm_match_value(gold.get("comment_kind")),
+        "alert_match": pred.get("alert_color") == gold.get("alert_color"),
+        "issue_type_match": bool(pred_issue and gold_issue and pred_issue == gold_issue),
+    }
+
+
+def _match_score(pred: dict[str, Any], gold: dict[str, Any]) -> float:
+    detail = _match_detail(pred, gold)
+    if detail["match_type"] == "semantic_mismatch":
+        return 0.0
+    return float(detail["score"])
 
 
 def compare_predictions(predicted: list[dict[str, Any]], gold: list[dict[str, Any]]) -> dict[str, Any]:
     unmatched_pred = set(range(len(predicted)))
     matches: list[dict[str, Any]] = []
     missed: list[dict[str, Any]] = []
+    semantic_mismatches: list[dict[str, Any]] = []
 
     for gi, gold_row in enumerate(gold):
-        best: tuple[float, int] | None = None
+        best: tuple[float, int, dict[str, Any]] | None = None
+        best_blocked: tuple[float, int, dict[str, Any]] | None = None
         for pi in unmatched_pred:
             pred = predicted[pi]
             if gold_row.get("criterion_code") and pred.get("criterion_code") != gold_row.get("criterion_code"):
                 continue
-            score = _match_score(pred, gold_row)
+            detail = _match_detail(pred, gold_row)
+            score = float(detail["score"])
+            if detail["match_type"] == "semantic_mismatch":
+                if score >= _MATCH_SCORE_THRESHOLD and (best_blocked is None or score > best_blocked[0]):
+                    best_blocked = (score, pi, detail)
+                continue
             if best is None or score > best[0]:
-                best = (score, pi)
-        if best is None or best[0] < 0.35:
+                best = (score, pi, detail)
+        if best is None or best[0] < _MATCH_SCORE_THRESHOLD:
+            if best_blocked is not None:
+                blocked_score, blocked_pi, blocked_detail = best_blocked
+                semantic_mismatches.append(
+                    {
+                        "gold_index": gi,
+                        "predicted_index": blocked_pi,
+                        "score": blocked_score,
+                        "match_type": "semantic_mismatch",
+                        "match_reasons": blocked_detail.get("match_reasons") or [],
+                        "criterion_match": blocked_detail.get("criterion_match"),
+                        "comment_kind_match": blocked_detail.get("comment_kind_match"),
+                        "alert_match": blocked_detail.get("alert_match"),
+                        "issue_type_match": blocked_detail.get("issue_type_match"),
+                        "text_similarity": blocked_detail.get("text_similarity"),
+                        "gold": gold_row,
+                        "predicted": predicted[blocked_pi],
+                    }
+                )
             missed.append({"gold_index": gi, **gold_row})
             continue
-        _, pi = best
+        _, pi, detail = best
         unmatched_pred.remove(pi)
         pred = predicted[pi]
         p_anchor = pred.get("anchor_position_idx")
@@ -1357,27 +1525,42 @@ def compare_predictions(predicted: list[dict[str, Any]], gold: list[dict[str, An
                 "gold_index": gi,
                 "predicted_index": pi,
                 "score": best[0],
+                "match_type": detail.get("match_type"),
+                "match_reasons": detail.get("match_reasons") or [],
                 "anchor_delta": delta,
-                "criterion_match": pred.get("criterion_code") == gold_row.get("criterion_code"),
-                "alert_match": pred.get("alert_color") == gold_row.get("alert_color"),
-                "text_similarity": text_similarity(str(pred.get("comment_text") or ""), str(gold_row.get("comment_text") or "")),
+                "criterion_match": detail.get("criterion_match"),
+                "comment_kind_match": detail.get("comment_kind_match"),
+                "alert_match": detail.get("alert_match"),
+                "issue_type_match": detail.get("issue_type_match"),
+                "text_similarity": detail.get("text_similarity"),
                 "gold": gold_row,
                 "predicted": pred,
             }
         )
 
     extra = [{"predicted_index": pi, **predicted[pi]} for pi in sorted(unmatched_pred)]
-    actionable_gold = [g for g in gold if g.get("comment_kind") == "actionable_feedback"]
-    actionable_missed = [m for m in missed if m.get("comment_kind") == "actionable_feedback"]
+    actionable_gold = [g for g in gold if _is_actionable_comment(g)]
+    actionable_missed = [m for m in missed if _is_actionable_comment(m)]
+    praise_gold = [g for g in gold if _is_praise_success_comment(g)]
+    praise_missed = [m for m in missed if _is_praise_success_comment(m)]
+    warning_gold = [g for g in gold if _is_warning_recommendation(g)]
+    warning_missed = [m for m in missed if _is_warning_recommendation(m)]
     anchor_deltas = [m["anchor_delta"] for m in matches if m.get("anchor_delta") is not None]
     return {
         "summary": {
             "gold_total": len(gold),
             "gold_actionable": len(actionable_gold),
+            "gold_praise_success": len(praise_gold),
+            "gold_warning_recommendations": len(warning_gold),
             "predicted_total": len(predicted),
             "matched_total": len(matches),
+            "strict_matched": sum(1 for m in matches if m.get("match_type") == "strict_matched"),
+            "loose_matched": sum(1 for m in matches if m.get("match_type") == "loose_matched"),
+            "semantic_mismatch": len(semantic_mismatches),
             "missed_total": len(missed),
             "missed_actionable": len(actionable_missed),
+            "missed_praise_success": len(praise_missed),
+            "missed_warning_recommendations": len(warning_missed),
             "extra_total": len(extra),
             "precision_approx": round(len(matches) / len(predicted), 4) if predicted else 0.0,
             "recall_approx": round(len(matches) / len(gold), 4) if gold else 0.0,
@@ -1385,11 +1568,21 @@ def compare_predictions(predicted: list[dict[str, Any]], gold: list[dict[str, An
             "actionable_recall_approx": round((len(actionable_gold) - len(actionable_missed)) / len(actionable_gold), 4)
             if actionable_gold
             else 0.0,
+            "praise_success_recall": round((len(praise_gold) - len(praise_missed)) / len(praise_gold), 4)
+            if praise_gold
+            else 0.0,
+            "warning_recommendation_recall": round((len(warning_gold) - len(warning_missed)) / len(warning_gold), 4)
+            if warning_gold
+            else 0.0,
             "anchor_exact": sum(1 for d in anchor_deltas if d == 0),
             "anchor_within_1": sum(1 for d in anchor_deltas if d <= 1),
             "anchor_within_2": sum(1 for d in anchor_deltas if d <= 2),
             "anchor_mean_delta": round(sum(anchor_deltas) / len(anchor_deltas), 4) if anchor_deltas else None,
             "gold_comment_kind_counts": dict(Counter(g.get("comment_kind") or "unknown" for g in gold)),
+            "matched_type_counts": dict(Counter(m.get("match_type") or "unknown" for m in matches)),
+            "semantic_mismatch_reason_counts": dict(
+                Counter(reason for m in semantic_mismatches for reason in (m.get("match_reasons") or []))
+            ),
             "predicted_status_counts": dict(Counter(p.get("status") or "unknown" for p in predicted)),
             "predicted_source_stage_counts": dict(
                 Counter((p.get("metadata") or {}).get("source_stage") or "unknown" for p in predicted)
@@ -1402,6 +1595,7 @@ def compare_predictions(predicted: list[dict[str, Any]], gold: list[dict[str, An
             ),
         },
         "matches": matches,
+        "semantic_mismatches": semantic_mismatches,
         "missed_gold": missed,
         "extra_predicted": extra,
     }
@@ -1422,14 +1616,19 @@ def render_report(payload: dict[str, Any]) -> str:
         "",
         f"- Gold comments: {s['gold_total']} (actionable: {s['gold_actionable']})",
         f"- Predicted comments: {s['predicted_total']}",
-        f"- Matched: {s['matched_total']}",
+        f"- Matched: {s['matched_total']} (strict: {s.get('strict_matched')}, loose: {s.get('loose_matched')})",
+        f"- Semantic mismatches blocked: {s.get('semantic_mismatch')}",
         f"- Missed gold: {s['missed_total']} (actionable: {s['missed_actionable']})",
         f"- Extra predicted: {s['extra_total']}",
         f"- Approx precision / historical gold recall: {s['precision_approx']} / {s.get('historical_gold_recall', s['recall_approx'])}",
         f"- Actionable recall: {s['actionable_recall_approx']}",
+        f"- Praise/success recall: {s.get('praise_success_recall')}",
+        f"- Warning recommendation recall: {s.get('warning_recommendation_recall')}",
         f"- Anchor exact / within 1 / within 2: {s['anchor_exact']} / {s['anchor_within_1']} / {s['anchor_within_2']}",
         f"- Anchor mean delta: {s['anchor_mean_delta']}",
         f"- Gold kinds: {json.dumps(s['gold_comment_kind_counts'], ensure_ascii=False)}",
+        f"- Matched types: {json.dumps(s.get('matched_type_counts', {}), ensure_ascii=False)}",
+        f"- Semantic mismatch reasons: {json.dumps(s.get('semantic_mismatch_reason_counts', {}), ensure_ascii=False)}",
         f"- Predicted statuses: {json.dumps(s['predicted_status_counts'], ensure_ascii=False)}",
         f"- Predicted source stages: {json.dumps(s.get('predicted_source_stage_counts', {}), ensure_ascii=False)}",
         f"- Predicted calibration decisions: {json.dumps(s.get('predicted_calibration_decision_counts', {}), ensure_ascii=False)}",
@@ -1447,6 +1646,7 @@ def render_report(payload: dict[str, Any]) -> str:
     for title, key in [
         ("Source stage", "by_source_stage"),
         ("Comment kind", "by_comment_kind"),
+        ("Match type", "by_match_type"),
         ("Status", "by_status"),
         ("Calibration decision", "by_calibration_decision"),
         ("LLM drop recovered", "by_llm_drop_recovered"),
@@ -1472,6 +1672,17 @@ def render_report(payload: dict[str, Any]) -> str:
         for row in missed:
             text = str(row.get("comment_text") or "").replace("\n", " ")[:180]
             lines.append(f"| {row.get('comment_kind')} | `{row.get('criterion_code')}` | {row.get('alert_color')} | {text} |")
+    lines.extend(["", "## Semantic Mismatches", ""])
+    mismatches = payload["comparison"].get("semantic_mismatches", [])[:30]
+    if not mismatches:
+        lines.append("No semantic mismatches were blocked.")
+    else:
+        lines.extend(["| Reason | Gold | Predicted |", "|---|---|---|"])
+        for row in mismatches:
+            reason = ", ".join(str(x) for x in (row.get("match_reasons") or []))
+            gold_text = str((row.get("gold") or {}).get("comment_text") or "").replace("\n", " ")[:140]
+            pred_text = str((row.get("predicted") or {}).get("comment_text") or "").replace("\n", " ")[:140]
+            lines.append(f"| {reason} | {gold_text} | {pred_text} |")
     lines.extend(["", "## Extra Predicted", ""])
     extra = payload["comparison"]["extra_predicted"][:30]
     if not extra:
